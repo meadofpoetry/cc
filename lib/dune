@@ -1,0 +1,4 @@
+(library
+ (name cc)
+ (wrapped false)
+ (preprocess (pps ppx_deriving.show)))

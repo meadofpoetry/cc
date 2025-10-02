@@ -1,0 +1,94 @@
+
+let emit_lex = ref false
+let emit_parsetree = ref false
+let emit_codegen = ref false
+
+let filepath = ref ""
+
+let usage = "cc [--lex|--parse|--codegen] file.c"
+
+let lexer in_channel =
+  let tokens = Lexer.tokens in_channel in
+  if not !emit_lex
+  then tokens
+  else begin
+      let rec loop () =
+        match tokens#token with
+        | None -> ()
+        | Some tok ->
+           print_endline @@ Lexer.show tok;
+           loop ()
+      in
+      loop ();
+      raise Exit
+    end
+
+
+let parser tokens =
+  let parsetree = Parser.parse tokens in
+  if not !emit_parsetree
+  then parsetree
+  else begin
+      Format.printf "%a\n" Parsetree.pp_program parsetree;
+      raise Exit
+    end
+
+let codegen parsetree =
+  let asm = Backend.compile parsetree in
+  if not !emit_codegen
+  then asm
+  else begin
+      Format.printf "%a\n" X86.pp_program asm;
+      raise Exit
+    end
+
+let write_out_s asm =
+  let out_file, out_chan = Filename.open_temp_file "out" ".S" in
+  Fun.protect ~finally:(fun () -> Out_channel.close out_chan)
+    (fun () ->
+      Format.fprintf
+        (Format.formatter_of_out_channel out_chan)
+        "%a\n"
+        X86.pp_program asm);
+  out_file
+
+let assemble asm_file =
+  let target = Filename.chop_extension !filepath in
+  let command = Printf.sprintf "gcc %s -o %s" asm_file target in
+  Sys.command command
+
+let () =
+  let set_filepath arg =
+    filepath := arg
+  in
+  let args =
+    [
+      ("--lex", Arg.Set emit_lex, "print lexer result and exit");
+      ("--parse", Arg.Set emit_parsetree, "print parser result and exit");
+      ("--codegen", Arg.Set emit_codegen, "print resulting assembly and exit");
+    ]
+  in
+  Arg.parse args set_filepath usage;
+  try
+    In_channel.with_open_text !filepath
+      (fun in_channel ->
+        lexer in_channel
+        |> parser
+        |> codegen
+        |> write_out_s
+        |> assemble
+        |> exit)
+  with Exit ->
+        exit 0
+     | Lexer.Lexer_failure { ch; pos } ->
+        Printf.eprintf "Lexer: unexpected char %c at pos %d\n" ch pos;
+        exit 1
+     | Parser.Unexpected_eof ->
+        Printf.eprintf "Parser: unexpected end of file\n";
+        exit 1
+     | Parser.Unexpected_token { msg; actual } ->
+        Format.eprintf "Parser: %s, got %a\n" msg Lexer.pp actual;
+        exit 1
+     | Failure msg ->
+        Printf.eprintf "Error: %s\n" msg;
+        exit 1
