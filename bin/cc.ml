@@ -1,11 +1,12 @@
 
 let emit_lex = ref false
 let emit_parsetree = ref false
+let emit_tacky = ref false
 let emit_codegen = ref false
 
 let filepath = ref ""
 
-let usage = "cc [--lex|--parse|--codegen] file.c"
+let usage = "cc [--lex|--parse|--tacky|--codegen] file.c"
 
 let lexer in_channel =
   let tokens = Lexer.tokens in_channel in
@@ -33,8 +34,17 @@ let parser tokens =
       raise Exit
     end
 
-let codegen parsetree =
-  let asm = Backend.compile parsetree in
+let ir_gen parsetree =
+  let tacky = Backend.tacky parsetree in
+  if not !emit_tacky
+  then tacky
+  else begin
+      Format.printf "%a\n" Tacky.pp_program tacky;
+      raise Exit
+    end
+
+let codegen tacky =
+  let asm = Backend.compile tacky in
   if not !emit_codegen
   then asm
   else begin
@@ -65,6 +75,7 @@ let () =
     [
       ("--lex", Arg.Set emit_lex, "print lexer result and exit");
       ("--parse", Arg.Set emit_parsetree, "print parser result and exit");
+      ("--tacky", Arg.Set emit_tacky, "print tacky ir and exit");
       ("--codegen", Arg.Set emit_codegen, "print resulting assembly and exit");
     ]
   in
@@ -74,6 +85,7 @@ let () =
       (fun in_channel ->
         lexer in_channel
         |> parser
+        |> ir_gen
         |> codegen
         |> write_out_s
         |> assemble

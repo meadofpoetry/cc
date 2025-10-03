@@ -4,10 +4,30 @@ type program = Program of fun_decl
 and fun_decl = Function of { name : Id.t; instr : instr list }
 
 and instr = Mov of { src : operand; dst : operand }
+          | Neg of operand
+          | Not of operand
+          | Sub of { value : operand; dst : operand }
+          | Push of operand
+          | Pop of operand
           | Ret
 
 and operand = Imm of int
-            | Register
+            | Reg of reg
+            | Pseudo of Id.t
+            | Stack of int
+
+and reg = RAX | RBP | RSP | R10
+
+let prolog argc =
+  [ Push (Reg RBP)
+  ; Mov  { src = Reg RSP; dst = Reg RBP }
+  ; Sub  { value = Imm (argc * 8); dst = Reg RSP }
+  ]
+
+let epilog =
+  [ Mov  { src = Reg RBP; dst = Reg RSP }
+  ; Pop (Reg RBP)
+  ]
 
 let rec pp_program out (Program f) =
   let open Format in
@@ -27,12 +47,37 @@ and pp_fun_decl out (Function { name; instr }) =
 
 and pp_instr out = function
   | Mov { src; dst } ->
-     Format.fprintf out "\tmovl\t%a, %a" pp_operand src pp_operand dst
+     emit out "movq" [src; dst]
+  | Sub { value; dst } ->
+     emit out "subq"  [value; dst]
+  | Push op ->
+     emit out "pushq" [op]
+  | Pop op ->
+     emit out "popq" [op]
+  | Neg op ->
+     emit out "negq" [op]
+  | Not op ->
+     emit out "notq" [op]
   | Ret ->
-     Format.pp_print_string out "\tret"
+     emit out "ret" []
 
 and pp_operand out = function
   | Imm i ->
      Format.fprintf out "$%d" i
-  | Register ->
-     Format.pp_print_string out "%eax"
+  | Reg RAX ->
+     Format.pp_print_string out "%rax"
+  | Reg RBP ->
+     Format.pp_print_string out "%rbp"
+  | Reg RSP ->
+     Format.pp_print_string out "%rsp"
+  | Reg R10 ->
+     Format.pp_print_string out "%r10"
+  | Stack off ->
+     Format.fprintf out "-%d(%%rbp)" (off * 8)
+  | Pseudo name ->
+     Format.fprintf out "P{%s}" name
+
+and emit out instr args =
+  let open Format in
+  fprintf out "\t%s\t" instr;
+  pp_print_list ~pp_sep:(fun out () -> pp_print_string out ", ") pp_operand out args

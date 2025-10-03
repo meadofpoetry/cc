@@ -7,6 +7,10 @@ type t = { token : token
 and token =
   | TId of string
   | TNumber of int
+  (* C ops *)
+  | TMinus
+  | TMinusMinus
+  | TTilde
   (* C Keywords *)
   | TInt
   | TVoid
@@ -72,7 +76,7 @@ let is_blank ch =
 
 let is_symbol ch =
   match ch with
-  | '(' | ')' | '{' | '}' | ';' | ',' -> true
+  | '(' | ')' | '{' | '}' | ';' | ',' | '-' | '+' -> true
   | _ -> false
 
 let rec tokens in_channel : < token : t option > =
@@ -84,6 +88,22 @@ let rec tokens in_channel : < token : t option > =
 and next_token state () =
   if State.is_end state then None
   else match State.peek state with
+  | '-' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '-' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TMinusMinus; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TMinus; start = start; _end = _end }
+     end
+  | '~' ->
+     let start = State.pos state in
+     ignore @@ State.next state;
+     let _end  = State.pos state in
+     Some { token = TTilde; start = start; _end = _end }
   | '(' ->
      let start = State.pos state in
      ignore @@ State.next state;

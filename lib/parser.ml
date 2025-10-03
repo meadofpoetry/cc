@@ -19,11 +19,16 @@ class stream (t : < token : Lexer.t option >) =
       | Some s -> s
 
     method next =
-      state <- tokens#token
+      let cur = self#current in
+      state <- tokens#token;
+      cur
+
+    method skip =
+      ignore @@ self#next
     
     method accept tok =
       if self#current.token = tok
-      then self#next
+      then ignore @@ self#skip
       else unexpected_token ~actual:self#current "Expected token %a" Lexer.pp_token tok
   end
 
@@ -31,7 +36,7 @@ class stream (t : < token : Lexer.t option >) =
 let token_value stream f ~err_msg =
   try
     let res = f (stream#current.Lexer.token) in
-    stream#next;
+    stream#skip;
     res
   with Match_failure _ -> unexpected_token ~actual:stream#current err_msg
 
@@ -68,12 +73,28 @@ and parse_statement stream =
   Parsetree.PReturn expr
 
 and parse_expr stream =
-  let i = token_value
-            stream
-            (function TNumber i -> i)
-            ~err_msg:"Constant expected"
-  in
-  Parsetree.PConst i
+  let next_tok = stream#current in
+  match next_tok.token with
+  | Lexer.TNumber i ->
+     stream#skip;
+     Parsetree.PConst i
+  | Lexer.TTilde | Lexer.TMinus ->
+     let op   = parse_unop stream in
+     let exp' = parse_expr stream in
+     Parsetree.PUn_op (op, exp')
+  | Lexer.TLPar ->
+     stream#skip;
+     let exp' = parse_expr stream in
+     stream#accept Lexer.TRPar;
+     exp'
+  | _ -> unexpected_token "Expression:" ~actual:next_tok
+
+and parse_unop stream =
+  let next_tok = stream#next in
+  match next_tok.token with
+  | Lexer.TTilde -> Parsetree.PBit_neg
+  | Lexer.TMinus -> Parsetree.PNeg
+  | _ -> unexpected_token "Unary:" ~actual:next_tok
 
 and ensure_end stream =
   try
