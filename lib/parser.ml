@@ -40,6 +40,22 @@ let token_value stream f ~err_msg =
     res
   with Match_failure _ -> unexpected_token ~actual:stream#current err_msg
 
+let is_binop = function
+  | Lexer.TPlus | Lexer.TMinus | Lexer.TStar | Lexer.TSlash | Lexer.TPercent
+    | Lexer.TLeq | Lexer.TLt | Lexer.TGt | Lexer.TGeq
+    | Lexer.TEqEq | Lexer.TExclamEq
+    |  Lexer.TAmpAmp | Lexer.TBarBar -> true
+  | _ -> false
+
+let precedence = function
+  | Lexer.TStar | Lexer.TSlash | Lexer.TPercent -> 50 
+  | Lexer.TPlus | TMinus -> 45
+  | Lexer.TLeq | Lexer.TLt | Lexer.TGt | Lexer.TGeq -> 35
+  | Lexer.TEqEq | Lexer.TExclamEq -> 30
+  | Lexer.TAmpAmp -> 10
+  | Lexer.TBarBar -> 5
+  | tok -> failwith ("Unexpected precedence token: " ^ Lexer.show_token tok)
+
 let rec parse (tokens : < token : Lexer.t option >) : Parsetree.program =
   let s = new stream tokens in
   let res = parse_program s in
@@ -73,14 +89,31 @@ and parse_statement stream =
   Parsetree.PReturn expr
 
 and parse_expr stream =
+  parse_expr_prec stream 0
+
+and parse_expr_prec stream min_prec =
+  let rec loop expr =
+    let next_tok = stream#current in
+    if is_binop next_tok.token && precedence next_tok.token > min_prec
+    then
+      let op = parse_binop stream in
+      let right = parse_expr_prec stream (precedence next_tok.token) in
+      loop (Parsetree.PBin_op (op, expr, right))
+    else
+      expr
+  in
+  let left = parse_factor stream in
+  loop left
+
+and parse_factor stream =
   let next_tok = stream#current in
   match next_tok.token with
   | Lexer.TNumber i ->
      stream#skip;
      Parsetree.PConst i
-  | Lexer.TTilde | Lexer.TMinus ->
+  | Lexer.TTilde | Lexer.TMinus | Lexer.TExclam -> (* ~-! *)
      let op   = parse_unop stream in
-     let exp' = parse_expr stream in
+     let exp' = parse_factor stream in
      Parsetree.PUn_op (op, exp')
   | Lexer.TLPar ->
      stream#skip;
@@ -94,7 +127,26 @@ and parse_unop stream =
   match next_tok.token with
   | Lexer.TTilde -> Parsetree.PBit_neg
   | Lexer.TMinus -> Parsetree.PNeg
+  | Lexer.TExclam -> Parsetree.PNot
   | _ -> unexpected_token "Unary:" ~actual:next_tok
+
+and parse_binop stream =
+  let next_tok = stream#next in
+  match next_tok.token with
+  | Lexer.TPlus -> Parsetree.PAdd
+  | Lexer.TMinus -> Parsetree.PSub
+  | Lexer.TStar -> Parsetree.PMult
+  | Lexer.TSlash -> Parsetree.PDiv
+  | Lexer.TPercent -> Parsetree.PRem
+  | Lexer.TAmpAmp -> Parsetree.PAnd
+  | Lexer.TBarBar -> Parsetree.POr
+  | Lexer.TEqEq -> Parsetree.PEqual
+  | Lexer.TExclamEq -> Parsetree.PNotEqual
+  | Lexer.TLt -> Parsetree.PLessThan
+  | Lexer.TLeq -> Parsetree.PLessEqual
+  | Lexer.TGt -> Parsetree.PGreaterThan
+  | Lexer.TGeq -> Parsetree.PGreaterEqual
+  | _ -> unexpected_token "Binary:" ~actual:next_tok
 
 and ensure_end stream =
   try

@@ -8,6 +8,15 @@ let filepath = ref ""
 
 let usage = "cc [--lex|--parse|--tacky|--codegen] file.c"
 
+let cpp file =
+  let basename = Filename.(basename file |> chop_extension) in
+  let outfile  = Filename.temp_file basename ".pp.c" in
+  let command  = Printf.sprintf "cpp -P %s -o %s" file outfile in
+  let res = Sys.command command in
+  if res != 0
+  then failwith "Preprocessor failed"
+  else outfile
+
 let lexer in_channel =
   let tokens = Lexer.tokens in_channel in
   if not !emit_lex
@@ -81,7 +90,8 @@ let () =
   in
   Arg.parse args set_filepath usage;
   try
-    In_channel.with_open_text !filepath
+    let source_file = cpp !filepath in
+    In_channel.with_open_text source_file
       (fun in_channel ->
         lexer in_channel
         |> parser

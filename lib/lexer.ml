@@ -10,7 +10,24 @@ and token =
   (* C ops *)
   | TMinus
   | TMinusMinus
+  | TPlus
+  | TPlusPlus
+  | TStar
+  | TSlash
+  | TPercent
   | TTilde
+  | TExclam (* ! *)
+  | TAmp    (* & *)
+  | TBar    (* | *)
+  | TAmpAmp (* && *)
+  | TBarBar (* || *)
+  | TEq
+  | TEqEq
+  | TExclamEq
+  | TLt
+  | TGt
+  | TLeq
+  | TGeq
   (* C Keywords *)
   | TInt
   | TVoid
@@ -76,7 +93,8 @@ let is_blank ch =
 
 let is_symbol ch =
   match ch with
-  | '(' | ')' | '{' | '}' | ';' | ',' | '-' | '+' -> true
+  | '(' | ')' | '{' | '}' | ';' | ',' | '-' | '+'
+    | '/' | '*' | '%' -> true
   | _ -> false
 
 let rec tokens in_channel : < token : t option > =
@@ -88,6 +106,72 @@ let rec tokens in_channel : < token : t option > =
 and next_token state () =
   if State.is_end state then None
   else match State.peek state with
+  | '=' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '=' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TEqEq; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TEq; start = start; _end = _end }
+     end
+  | '!' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '=' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TExclamEq; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TExclam; start = start; _end = _end }
+     end
+  | '<' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '=' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TLeq; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TLt; start = start; _end = _end }
+     end
+  | '>' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '=' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TGeq; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TGt; start = start; _end = _end }
+     end
+  | '&' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '&' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TAmpAmp; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TAmp; start = start; _end = _end }
+     end
+  | '|' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '|' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TBarBar; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TBar; start = start; _end = _end }
+     end
   | '-' ->
      let start = State.pos state in
      begin match State.next state with
@@ -99,6 +183,38 @@ and next_token state () =
         let _end  = State.pos state in
         Some { token = TMinus; start = start; _end = _end }
      end
+  | '+' ->
+     let start = State.pos state in
+     begin match State.next state with
+     | Some '+' ->
+        ignore @@ State.next state;
+        let _end  = State.pos state in
+        Some { token = TPlusPlus; start = start; _end = _end }
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TPlus; start = start; _end = _end }
+     end
+  | '/' ->
+     let start = State.pos state in
+     (* Check if comment *)
+     begin match State.next state with
+     | Some '*' | Some '/' ->
+        skip_comment state;
+        next_token state ()
+     | _ ->
+        let _end  = State.pos state in
+        Some { token = TSlash; start = start; _end = _end }
+     end
+  | '*' ->
+     let start = State.pos state in
+     ignore @@ State.next state;
+     let _end  = State.pos state in
+     Some { token = TStar; start = start; _end = _end }
+  | '%' ->
+     let start = State.pos state in
+     ignore @@ State.next state;
+     let _end  = State.pos state in
+     Some { token = TPercent; start = start; _end = _end }
   | '~' ->
      let start = State.pos state in
      ignore @@ State.next state;
@@ -135,10 +251,6 @@ and next_token state () =
      number state d
   | ' ' | '\t' | '\n' ->
      ignore @@ State.next state;
-     next_token state ()
-  | '/' ->
-     ignore @@ State.next state;
-     skip_comment state;
      next_token state ()
   | c ->
      raise (Lexer_failure { ch = c; pos = State.pos state })
