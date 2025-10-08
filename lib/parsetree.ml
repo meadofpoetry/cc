@@ -10,6 +10,7 @@ and block_item = PS of statement
 and var_decl = PVar_decl of Id.t * expr option
 
 and statement = PReturn of expr
+              | PIf of { cond : expr; _then : statement; _else : statement option }
               | PExpr of expr
               | PNull
 
@@ -18,6 +19,7 @@ and expr = PConst of int
          | PAssign of expr * expr
          | PUn_op of un_op * expr
          | PBin_op of bin_op * expr * expr
+         | PTernary of { cond : expr; _then : expr; _else : expr }
 
 and un_op = PNeg
           | PBit_neg

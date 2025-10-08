@@ -45,7 +45,7 @@ let parser tokens =
     end
 
 let validate parsetree =
-  let parsetree' = Var_resolution.resolve Var_resolution.Env.empty parsetree in
+  let parsetree' = Semantic.validate parsetree in
   if not !validate_only
   then parsetree'
   else begin

@@ -25,6 +25,18 @@ and tacky_fun_body body =
        let res = expr e in
        let i = Tacky.Return res in
        Dynarray.add_last instr i
+    | PIf { cond; _then; _else } ->
+       let cond_res = expr cond in
+       let false_label = Id.label "if_false" in
+       let end_label = Id.label "if_end" in
+       Dynarray.add_last instr (Tacky.JumpIfZero { cond = cond_res; target = false_label });
+       statement _then;
+       Option.iter (fun _ -> Dynarray.add_last instr (Tacky.Jump end_label)) _else;
+       Dynarray.add_last instr (Tacky.Label false_label);
+       Option.iter (fun s ->
+           statement s;
+           Dynarray.add_last instr (Tacky.Label end_label);
+         ) _else
     | PExpr e ->
        ignore @@ expr e
     | PNull ->
@@ -40,6 +52,20 @@ and tacky_fun_body body =
        let src = expr e in
        Dynarray.add_last instr (Tacky.Copy { src; dst });
        dst
+    | PTernary { cond; _then; _else } ->
+       let false_label = Id.label "tern_false" in
+       let end_label = Id.label "tern_end" in
+       let result = Id.temp () in
+       let cond_res = expr cond in
+       Dynarray.add_last instr (Tacky.JumpIfZero { cond = cond_res; target = false_label });
+       let v1 = expr _then in
+       Dynarray.add_last instr (Tacky.Copy { src = v1; dst = Tacky.Var result });
+       Dynarray.add_last instr (Tacky.Jump end_label);
+       Dynarray.add_last instr (Tacky.Label false_label);
+       let v2 = expr _else in
+       Dynarray.add_last instr (Tacky.Copy { src = v2; dst = Tacky.Var result });
+       Dynarray.add_last instr (Tacky.Label end_label);
+       Tacky.Var result
     | PUn_op (op, inner) ->
        let src = expr inner in
        let dst = Tacky.Var (Id.temp ()) in

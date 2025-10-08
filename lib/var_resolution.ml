@@ -39,6 +39,11 @@ and resolve_var_decl env (PVar_decl (name, init)) =
 
 and resolve_statement env = function
   | PReturn expr -> PReturn (resolve_expr env expr)
+  | PIf { cond; _then; _else } ->
+     PIf { cond = resolve_expr env cond
+         ; _then = resolve_statement env _then
+         ; _else = Option.map (resolve_statement env) _else
+       }
   | PExpr expr -> PExpr (resolve_expr env expr)
   | PNull -> PNull
 
@@ -52,6 +57,11 @@ and resolve_expr env = function
      PAssign (resolve_expr env v, resolve_expr env expr)
   | PAssign (lvalue, _) ->
      raise (Invalid_lvalue lvalue)
+  | PTernary { cond; _then; _else } ->
+     PTernary { cond = resolve_expr env cond
+              ; _then = resolve_expr env _then
+              ; _else = resolve_expr env _else
+       }
   | PConst _ as expr -> expr
   | PUn_op (op, expr) ->
      PUn_op (op, resolve_expr env expr)

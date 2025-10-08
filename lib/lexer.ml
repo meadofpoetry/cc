@@ -32,11 +32,15 @@ and token =
   | TInt
   | TVoid
   | TReturn
+  | TIf
+  | TElse
+  | TQuestion
   | TLPar
   | TRPar
   | TLBrace
   | TRBrace
   | TSemicol
+  | TColon
 
 exception Lexer_failure of { ch : char; pos : int }
 
@@ -220,6 +224,11 @@ and next_token state () =
      ignore @@ State.next state;
      let _end  = State.pos state in
      Some { token = TTilde; start = start; _end = _end }
+  | '?' ->
+     let start = State.pos state in
+     ignore @@ State.next state;
+     let _end  = State.pos state in
+     Some { token = TQuestion; start = start; _end = _end }
   | '(' ->
      let start = State.pos state in
      ignore @@ State.next state;
@@ -245,6 +254,11 @@ and next_token state () =
      ignore @@ State.next state;
      let _end  = State.pos state in
      Some { token = TSemicol; start = start; _end = _end }
+  | ':' ->
+     let start = State.pos state in
+     ignore @@ State.next state;
+     let _end  = State.pos state in
+     Some { token = TColon; start = start; _end = _end }
   | c when is_letter c ->
      identifier state c
   | d when is_digit d ->
@@ -271,6 +285,10 @@ and identifier state ch =
      Some { token = TVoid; start = start; _end = _end }
   | "int" ->
      Some { token = TInt; start = start; _end = _end }
+  | "if" ->
+     Some { token = TIf; start = start; _end = _end }
+  | "else" ->
+     Some { token = TElse; start = start; _end = _end }   
   | "return" ->
      Some { token = TReturn; start = start; _end = _end }
   | _ ->
