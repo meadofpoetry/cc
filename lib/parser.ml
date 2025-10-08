@@ -43,7 +43,7 @@ let token_value stream f ~err_msg =
 let is_binop = function
   | Lexer.TPlus | Lexer.TMinus | Lexer.TStar | Lexer.TSlash | Lexer.TPercent
     | Lexer.TLeq | Lexer.TLt | Lexer.TGt | Lexer.TGeq
-    | Lexer.TEqEq | Lexer.TExclamEq
+    | Lexer.TEqEq | Lexer.TExclamEq | Lexer.TEq
     |  Lexer.TAmpAmp | Lexer.TBarBar -> true
   | _ -> false
 
@@ -54,6 +54,7 @@ let precedence = function
   | Lexer.TEqEq | Lexer.TExclamEq -> 30
   | Lexer.TAmpAmp -> 10
   | Lexer.TBarBar -> 5
+  | Lexer.TEq -> 1
   | tok -> failwith ("Unexpected precedence token: " ^ Lexer.show_token tok)
 
 let rec parse (tokens : < token : Lexer.t option >) : Parsetree.program =
@@ -75,18 +76,56 @@ and parse_fun stream =
   stream#accept TVoid;
   stream#accept TRPar;
   stream#accept TLBrace;
-  let statement = parse_statement stream in
+  let items = parse_block_items [] stream in
   stream#accept TRBrace;
   Parsetree.PFunction {
       name = name;
-      body = statement
+      body = items
     }
 
+and parse_block_items acc stream =
+  let next_tok = stream#current in
+    if next_tok.token == TRBrace
+    then List.rev acc
+    else
+      let item = parse_block_item stream in
+      parse_block_items (item::acc) stream
+
+and parse_block_item stream =
+  let next_tok = stream#current in
+  if next_tok.token == TInt
+  then PD (parse_var_decl stream)
+  else PS (parse_statement stream)
+
+and parse_var_decl stream =
+  stream#accept TInt;
+  let name = token_value stream
+               (function (Lexer.TId n) -> n)
+               ~err_msg:"Expected variable name"
+  in
+  if stream#current.token != TEq
+  then Parsetree.PVar_decl (name, None)
+  else begin
+      stream#accept TEq;
+      let expr = parse_expr stream in
+      Parsetree.PVar_decl (name, Some expr)
+    end
+
 and parse_statement stream =
-  stream#accept TReturn;
-  let expr = parse_expr stream in
-  stream#accept TSemicol;
-  Parsetree.PReturn expr
+  let next_tok = stream#current in
+  match next_tok.token with
+  | TReturn ->
+     stream#skip;
+     let expr = parse_expr stream in
+     stream#accept TSemicol;
+     Parsetree.PReturn expr
+  | TSemicol ->
+     stream#skip;
+     Parsetree.PNull
+  | _ ->
+     let expr = parse_expr stream in
+     stream#accept TSemicol;
+     Parsetree.PExpr expr
 
 and parse_expr stream =
   parse_expr_prec stream 0
@@ -96,9 +135,16 @@ and parse_expr_prec stream min_prec =
     let next_tok = stream#current in
     if is_binop next_tok.token && precedence next_tok.token > min_prec
     then
-      let op = parse_binop stream in
-      let right = parse_expr_prec stream (precedence next_tok.token) in
-      loop (Parsetree.PBin_op (op, expr, right))
+      if next_tok.token == TEq
+      then
+        let _ = stream#skip in
+        (* = is right associative so min precedence is < prec(=) to parse a = (b = c) *)
+        let right = parse_expr_prec stream (precedence next_tok.token - 1) in
+        loop (Parsetree.PAssign (expr, right))
+      else
+        let op = parse_binop stream in
+        let right = parse_expr_prec stream (precedence next_tok.token) in
+        loop (Parsetree.PBin_op (op, expr, right))
     else
       expr
   in
@@ -111,6 +157,9 @@ and parse_factor stream =
   | Lexer.TNumber i ->
      stream#skip;
      Parsetree.PConst i
+  | Lexer.TId name ->
+     stream#skip;
+     Parsetree.PVar name
   | Lexer.TTilde | Lexer.TMinus | Lexer.TExclam -> (* ~-! *)
      let op   = parse_unop stream in
      let exp' = parse_factor stream in

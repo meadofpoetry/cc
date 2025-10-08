@@ -10,15 +10,36 @@ and tacky_fun_decl (PFunction { name; body }) =
 and tacky_fun_body body =
   let instr = Dynarray.create () in
 
-  let rec statement = function
+  let rec body_item = function
+    | PD v -> var_decl v
+    | PS s -> statement s
+
+  and var_decl (PVar_decl (name, init)) =
+    match init with
+    | None -> ()
+    | Some e ->
+       ignore @@ expr (PAssign (PVar name, e))
+
+  and statement = function
     | PReturn e ->
        let res = expr e in
        let i = Tacky.Return res in
        Dynarray.add_last instr i
+    | PExpr e ->
+       ignore @@ expr e
+    | PNull ->
+       ()
 
   and expr = function
     | PConst i ->
        Tacky.Const i
+    | PVar name ->
+       Tacky.Var name
+    | PAssign (lvalue, e) ->
+       let dst = expr lvalue in
+       let src = expr e in
+       Dynarray.add_last instr (Tacky.Copy { src; dst });
+       dst
     | PUn_op (op, inner) ->
        let src = expr inner in
        let dst = Tacky.Var (Id.temp ()) in
@@ -62,7 +83,7 @@ and tacky_fun_body body =
        dst
   in
   
-  ignore @@ statement body;
+  List.iter body_item body;
   Dynarray.to_list instr
 
 and tacky_unop = function

@@ -1,12 +1,13 @@
 
 let emit_lex = ref false
 let emit_parsetree = ref false
+let validate_only = ref false
 let emit_tacky = ref false
 let emit_codegen = ref false
 
 let filepath = ref ""
 
-let usage = "cc [--lex|--parse|--tacky|--codegen] file.c"
+let usage = "cc [--lex|--parse|--validate|--tacky|--codegen] file.c"
 
 let cpp file =
   let basename = Filename.(basename file |> chop_extension) in
@@ -40,6 +41,15 @@ let parser tokens =
   then parsetree
   else begin
       Format.printf "%a\n" Parsetree.pp_program parsetree;
+      raise Exit
+    end
+
+let validate parsetree =
+  let parsetree' = Var_resolution.resolve Var_resolution.Env.empty parsetree in
+  if not !validate_only
+  then parsetree'
+  else begin
+      Format.printf "%a\n" Parsetree.pp_program parsetree';
       raise Exit
     end
 
@@ -84,6 +94,7 @@ let () =
     [
       ("--lex", Arg.Set emit_lex, "print lexer result and exit");
       ("--parse", Arg.Set emit_parsetree, "print parser result and exit");
+      ("--validate", Arg.Set validate_only, "semantic analysis and exit");
       ("--tacky", Arg.Set emit_tacky, "print tacky ir and exit");
       ("--codegen", Arg.Set emit_codegen, "print resulting assembly and exit");
     ]
@@ -95,6 +106,7 @@ let () =
       (fun in_channel ->
         lexer in_channel
         |> parser
+        |> validate
         |> ir_gen
         |> codegen
         |> write_out_s
@@ -110,6 +122,15 @@ let () =
         exit 1
      | Parser.Unexpected_token { msg; actual } ->
         Format.eprintf "Parser: %s, got %a\n" msg Lexer.pp actual;
+        exit 1
+     | Var_resolution.Invalid_lvalue _ ->
+        Format.eprintf "Validate: bad lvalue\n";
+        exit 1
+     | Var_resolution.Redeclaration v ->
+        Format.eprintf "Validate: redeclared variable %s\n" v;
+        exit 1
+     | Var_resolution.Undeclared v ->
+        Format.eprintf "Validate: undeclared variable %s\n" v;
         exit 1
      | Failure msg ->
         Printf.eprintf "Error: %s\n" msg;
