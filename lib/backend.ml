@@ -10,7 +10,10 @@ and tacky_fun_decl (PFunction { name; body }) =
 and tacky_fun_body body =
   let instr = Dynarray.create () in
 
-  let rec body_item = function
+  let rec block (PBlock items) =
+    List.iter block_item items
+  
+  and block_item = function
     | PD v -> var_decl v
     | PS s -> statement s
 
@@ -37,6 +40,8 @@ and tacky_fun_body body =
            statement s;
            Dynarray.add_last instr (Tacky.Label end_label);
          ) _else
+    | PCompound b ->
+       ignore @@ block b
     | PExpr e ->
        ignore @@ expr e
     | PNull ->
@@ -109,7 +114,7 @@ and tacky_fun_body body =
        dst
   in
   
-  List.iter body_item body;
+  block body;
   Dynarray.to_list instr
 
 and tacky_unop = function

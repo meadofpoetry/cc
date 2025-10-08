@@ -76,21 +76,24 @@ and parse_fun stream =
   stream#accept TLPar;
   stream#accept TVoid;
   stream#accept TRPar;
-  stream#accept TLBrace;
-  let items = parse_block_items [] stream in
-  stream#accept TRBrace;
   Parsetree.PFunction {
       name = name;
-      body = items
+      body = parse_block stream
     }
 
-and parse_block_items acc stream =
-  let next_tok = stream#current in
-  if next_tok.token == TRBrace
-  then List.rev acc
-  else
-    let item = parse_block_item stream in
-    parse_block_items (item::acc) stream
+and parse_block stream =
+  let rec parse_items acc =
+    let next_tok = stream#current in
+    if next_tok.token == TRBrace
+    then List.rev acc
+    else
+      let item = parse_block_item stream in
+      parse_items (item::acc)
+  in
+  stream#accept TLBrace;
+  let items = parse_items [] in
+  stream#accept TRBrace;
+  PBlock items
 
 and parse_block_item stream =
   let next_tok = stream#current in
@@ -135,6 +138,8 @@ and parse_statement stream =
          Some (parse_statement stream)
      in
      Parsetree.PIf { cond; _then; _else }
+  | TLBrace ->
+     PCompound (parse_block stream)
   | TSemicol ->
      stream#skip;
      Parsetree.PNull

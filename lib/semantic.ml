@@ -3,8 +3,8 @@ open Parsetree
 let fix_missing_return parsetree =
   let rec apply (PProgram f) =
     PProgram (apply_fun_def f)
-  and apply_fun_def (PFunction { name; body }) =
-    PFunction { name; body = apply_body body }
+  and apply_fun_def (PFunction { name; body = PBlock statements }) =
+    PFunction { name; body = PBlock (apply_body statements) }
   and apply_body = function
     | [] -> [PS (PReturn (PConst 0))]
     | [PS (PReturn _)] as body -> body
