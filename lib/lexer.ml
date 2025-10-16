@@ -32,6 +32,11 @@ and token =
   | TInt
   | TVoid
   | TReturn
+  | TDo
+  | TWhile
+  | TFor
+  | TBreak
+  | TContinue
   | TIf
   | TElse
   | TQuestion
@@ -288,7 +293,17 @@ and identifier state ch =
   | "if" ->
      Some { token = TIf; start = start; _end = _end }
   | "else" ->
-     Some { token = TElse; start = start; _end = _end }   
+     Some { token = TElse; start = start; _end = _end }
+  | "do" ->
+     Some { token = TDo; start = start; _end = _end }
+  | "while" ->
+     Some { token = TWhile; start = start; _end = _end }
+  | "for" ->
+     Some { token = TFor; start = start; _end = _end }
+  | "break" ->
+     Some { token = TBreak; start = start; _end = _end }
+  | "continue" ->
+     Some { token = TContinue; start = start; _end = _end }
   | "return" ->
      Some { token = TReturn; start = start; _end = _end }
   | _ ->

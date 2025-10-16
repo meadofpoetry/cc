@@ -15,3 +15,4 @@ let fix_missing_return parsetree =
 let validate parsetree =
   let parsetree' = fix_missing_return parsetree in
   Var_resolution.resolve Var_resolution.Env.empty parsetree'
+  |> Annotate_loops.annotate

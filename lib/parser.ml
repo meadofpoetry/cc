@@ -58,6 +58,15 @@ let precedence = function
   | Lexer.TEq -> 1
   | tok -> failwith ("Unexpected precedence token: " ^ Lexer.show_token tok)
 
+let optional (type a) ~(parser : stream -> a) ~(next_token : Lexer.token) (stream : stream) : a option =
+  if stream#current.token = next_token then None
+  else begin
+      let res = parser stream in
+      if stream#current.token <> next_token
+      then unexpected_token ~actual:stream#current "Optional expression: bad ending token";
+      Some res
+    end
+
 let rec parse (tokens : < token : Lexer.t option >) : Parsetree.program =
   let s = new stream tokens in
   let res = parse_program s in
@@ -125,6 +134,14 @@ and parse_statement stream =
      let expr = parse_expr stream in
      stream#accept TSemicol;
      Parsetree.PReturn expr
+  | TBreak ->
+     stream#skip;
+     stream#accept TSemicol;
+     Parsetree.PBreak None
+  | TContinue ->
+     stream#skip;
+     stream#accept TSemicol;
+     Parsetree.PContinue None
   | TIf ->
      stream#skip;
      stream#accept TLPar;
@@ -138,6 +155,32 @@ and parse_statement stream =
          Some (parse_statement stream)
      in
      Parsetree.PIf { cond; _then; _else }
+  | TWhile ->
+     stream#skip;
+     stream#accept TLPar;
+     let cond = parse_expr stream in
+     stream#accept TRPar;
+     let body = parse_statement stream in
+     Parsetree.PWhile { cond; body; loop_id = None }
+  | TDo ->
+     stream#skip;
+     let body = parse_statement stream in
+     stream#accept TWhile;
+     stream#accept TLPar;
+     let cond = parse_expr stream in
+     stream#accept TRPar;
+     stream#accept TSemicol;
+     Parsetree.PDoWhile { body; cond; loop_id = None }
+  | TFor ->
+     stream#skip;
+     stream#accept TLPar;
+     let init = parse_for_init stream in
+     let cond = optional ~parser:parse_expr ~next_token:TSemicol stream in
+     stream#accept TSemicol;
+     let post = optional ~parser:parse_expr ~next_token:TRPar stream in
+     stream#accept TRPar;
+     let body = parse_statement stream in
+     Parsetree.PFor { init; cond; post; body; loop_id = None }
   | TLBrace ->
      PCompound (parse_block stream)
   | TSemicol ->
@@ -147,6 +190,18 @@ and parse_statement stream =
      let expr = parse_expr stream in
      stream#accept TSemicol;
      Parsetree.PExpr expr
+
+and parse_for_init stream : Parsetree.for_init option =
+  match stream#current.token with
+  | TSemicol ->
+     stream#skip;
+     None
+  | TInt ->
+     Some (Parsetree.PInitDecl (parse_var_decl stream))
+  | _ ->
+     let e = parse_expr stream in
+     stream#accept TSemicol;
+     Some (Parsetree.PInitExpr e)
 
 and parse_expr stream =
   parse_expr_prec stream 0

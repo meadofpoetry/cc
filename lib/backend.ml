@@ -28,6 +28,12 @@ and tacky_fun_body body =
        let res = expr e in
        let i = Tacky.Return res in
        Dynarray.add_last instr i
+    | PBreak label_opt ->
+       let label = "break_" ^ Option.get label_opt in
+       Dynarray.add_last instr (Tacky.Jump label)
+    | PContinue label_opt ->
+       let label = "continue_" ^ Option.get label_opt in
+       Dynarray.add_last instr (Tacky.Jump label)
     | PIf { cond; _then; _else } ->
        let cond_res = expr cond in
        let false_label = Id.label "if_false" in
@@ -40,12 +46,53 @@ and tacky_fun_body body =
            statement s;
            Dynarray.add_last instr (Tacky.Label end_label);
          ) _else
+    | PWhile { cond; body; loop_id } ->
+       let label = Option.get loop_id in
+       let continue = "continue_" ^ label in
+       let break = "break_" ^ label in
+       Dynarray.add_last instr (Tacky.Label continue);
+       let cond_res = expr cond in
+       Dynarray.add_last instr (Tacky.JumpIfZero { cond = cond_res; target = break });
+       ignore @@ statement body;
+       Dynarray.add_last instr (Tacky.Jump continue);
+       Dynarray.add_last instr (Tacky.Label break)
+    | PDoWhile { body; cond; loop_id } ->
+       let label = Option.get loop_id in
+       let start = "start_" ^ label in
+       let continue = "continue_" ^ label in
+       let break = "break_" ^ label in
+       Dynarray.add_last instr (Tacky.Label start);
+       ignore @@ statement body;
+       Dynarray.add_last instr (Tacky.Label continue);
+       let cond_res = expr cond in
+       Dynarray.add_last instr (Tacky.JumpIfNotZero { cond = cond_res; target = start });
+       Dynarray.add_last instr (Tacky.Label break)
+    | PFor { init; cond; post; body; loop_id } ->
+       let label = Option.get loop_id in
+       let start = "start_" ^ label in
+       let continue = "continue_" ^ label in
+       let break = "break_" ^ label in
+       Option.iter for_init init;
+       Dynarray.add_last instr (Tacky.Label start);
+       Option.iter (fun cond ->
+           let cond_res = expr cond in
+           Dynarray.add_last instr (Tacky.JumpIfZero { cond = cond_res; target = break });
+         ) cond;
+       ignore @@ statement body;
+       Dynarray.add_last instr (Tacky.Label continue);
+       ignore @@ Option.map expr post;
+       Dynarray.add_last instr (Tacky.Jump start);
+       Dynarray.add_last instr (Tacky.Label break)
     | PCompound b ->
        ignore @@ block b
     | PExpr e ->
        ignore @@ expr e
     | PNull ->
        ()
+
+  and for_init = function
+    | PInitDecl d -> var_decl d
+    | PInitExpr e -> ignore @@ expr e
 
   and expr = function
     | PConst i ->

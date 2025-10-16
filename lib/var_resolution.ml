@@ -65,10 +65,38 @@ and resolve_var_decl env (PVar_decl (name, init)) =
 
 and resolve_statement env = function
   | PReturn expr -> PReturn (resolve_expr env expr)
+  | PBreak _ as s -> s
+  | PContinue _ as s -> s
   | PIf { cond; _then; _else } ->
      PIf { cond = resolve_expr env cond
          ; _then = resolve_statement env _then
          ; _else = Option.map (resolve_statement env) _else
+       }
+  | PWhile { cond; body; loop_id } ->
+     PWhile { cond = resolve_expr env cond
+            ; body = resolve_statement env body
+            ; loop_id
+       }
+  | PDoWhile { body; cond; loop_id } ->
+     PDoWhile { body = resolve_statement env body
+              ; cond = resolve_expr env cond
+              ; loop_id
+       }
+  | PFor { init; cond; post; body; loop_id } ->
+     let init', env' = match init with
+       | Some PInitExpr e ->
+          Some (PInitExpr (resolve_expr env e)), env
+       | Some PInitDecl d ->
+          let inner_env = Env.child_block env in 
+          let decl, env' = resolve_var_decl inner_env d in
+          Some (PInitDecl decl), env'
+       | None -> None, env
+     in
+     PFor { init = init'
+          ; cond = Option.map (resolve_expr env') cond
+          ; post = Option.map (resolve_expr env') post
+          ; body = resolve_statement env' body
+          ; loop_id
        }
   | PCompound block -> PCompound (resolve_block env block)
   | PExpr expr -> PExpr (resolve_expr env expr)
