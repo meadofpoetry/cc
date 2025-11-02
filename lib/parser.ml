@@ -82,7 +82,7 @@ and parse_program stream =
     then List.rev fs
     else loop (parse_fun_decl stream :: fs)
   in
-  Parsetree.PProgram(loop [])
+  loop []
 
 and parse_decl stream =
   stream#accept Lexer.TInt;
@@ -162,7 +162,7 @@ and parse_block stream =
   stream#accept TLBrace;
   let items = parse_items [] in
   stream#accept TRBrace;
-  PBlock items
+  items
 
 and parse_block_item stream =
   let next_tok = stream#current in

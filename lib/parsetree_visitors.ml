@@ -5,19 +5,12 @@ object (self : 'self)
   method visit_loop_id _env loop_id =
     loop_id
                
-  method visit_program env (PProgram fun_decls) =
-    self#visit_PProgram env fun_decls
-
-  method visit_PProgram env decls =
-    PProgram (List.map (self#visit_fun_decl env) decls)
+  method visit_program env fun_decls =
+    List.map (self#visit_fun_decl env) fun_decls
 
   method visit_decl env = function
-    | PFun_decl fdecl -> self#visit_PFun_decl env fdecl
-    | PVar_decl vdecl -> self#visit_PVar_decl env vdecl
-  
-  method visit_PFun_decl env d = PFun_decl (self#visit_fun_decl env d)
-
-  method visit_PVar_decl env d = PVar_decl (self#visit_var_decl env d)
+    | PFun_decl fdecl -> PFun_decl (self#visit_fun_decl env fdecl)
+    | PVar_decl vdecl -> PVar_decl (self#visit_var_decl env vdecl)
 
   method visit_fun_decl env { name; args; body } =
     { name; args; body = Option.map (self#visit_block env) body }
@@ -25,8 +18,8 @@ object (self : 'self)
   method visit_var_decl env (name, expr) =
     (name, Option.map (self#visit_expr env) expr)
   
-  method visit_block env (PBlock item_list) =
-    PBlock (List.map (self#visit_block_item env) item_list)
+  method visit_block env item_list =
+    List.map (self#visit_block_item env) item_list
 
   method visit_block_item env = function
     | PS s -> self#visit_PS env s

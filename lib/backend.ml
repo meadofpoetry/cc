@@ -1,7 +1,7 @@
 open Parsetree
 
 let rec tacky : Parsetree.program -> Tacky.program =
-  fun (PProgram fs) -> Tacky.Program (List.hd @@ List.map tacky_fun_decl fs)
+  fun fs -> Tacky.Program (List.hd @@ List.map tacky_fun_decl fs)
 
 and tacky_decl = function
   | PFun_decl fun_decl -> tacky_fun_decl fun_decl
@@ -14,7 +14,7 @@ and tacky_fun_decl { name; args = _; body } =
 and tacky_fun_body body =
   let instr = Dynarray.create () in
 
-  let rec block (PBlock items) =
+  let rec block items =
     List.iter block_item items
   
   and block_item = function

@@ -4,7 +4,7 @@ type 'a t = { value : 'a
             ; _end  : int
             }
 
-type program = PProgram of fun_decl list
+type program = fun_decl list
 [@@deriving show]
 
 and decl = PFun_decl of fun_decl
@@ -17,7 +17,7 @@ and fun_decl = { name : Id.t
 
 and var_decl = Id.t * expr option
 
-and block = PBlock of block_item list
+and block = block_item list
 
 and block_item = PS of statement
                | PD of decl

@@ -153,6 +153,12 @@ let () =
      | Var_resolution.Undeclared v ->
         Format.eprintf "Validate: undeclared variable %s\n" v;
         exit 1
+     | Var_resolution.Undeclared_fun v ->
+        Format.eprintf "Validate: undeclared function %s\n" v;
+        exit 1
+     | Var_resolution.Inner_fun_definition f ->
+        Format.eprintf "Validate: inner function definition %s\n" f;
+        exit 1
      | Asm_error exit_code ->
         Format.eprintf "Asm: exit code %d\n" exit_code;
         exit 1

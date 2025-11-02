@@ -4,123 +4,151 @@ exception Redeclaration : Id.t -> exn
 
 exception Undeclared : Id.t -> exn
 
+exception Undeclared_fun : Id.t -> exn
+
 exception Invalid_lvalue : Parsetree.expr -> exn
 
-module Env = struct
-  module M = Map.Make(String)
+exception Inner_fun_definition : Id.t -> exn
 
-  type 'a t = 'a M.t list
+module Scoped_env = struct
 
-  let empty = [M.empty]
+  type 'a t = (string, 'a) Hashtbl.t Stack.t
 
-  let child_block env = M.empty :: env
+  let make = Stack.create
 
-  let get k =
-    List.find_map (M.find_opt k)
+  let push_scope t =
+    Stack.push (Hashtbl.create 16) t
 
-  let get_from_current k = function
-    | [] -> failwith "unreachable"
-    | env :: _ -> M.find_opt k env
+  let pop_scope t =
+    ignore @@ Stack.pop t
+  
+  let with_scope ?(env = make ()) f =
+    push_scope env;
+    let res = f env in
+    pop_scope env;
+    res
 
-  let unique_alias k = function
-    | [] -> failwith "unreachable"
-    | env :: rest ->
-       let depth = List.length rest in
-       let unique_name = Id.var (Printf.sprintf "%s_b%d_" k depth) in
-       unique_name, (M.add k unique_name env)::rest
+  let depth env =
+    Stack.length env
+
+  let get_from_current t key =
+    Hashtbl.find_opt (Stack.top t) key
+
+  let add t key value =
+    Hashtbl.add (Stack.top t) key value
+
+  let find t key =
+    Stack.to_seq t
+    |> Seq.find_map (fun tbl -> Hashtbl.find_opt tbl key)
   
 end
 
-let rec resolve env (PProgram fs) =
-  PProgram (List.map (resolve_fun_def env) fs)
+type entry = { name : Id.t
+             ; has_linkage : bool
+             }
 
-and resolve_fun_def env { name; args; body } =
-  { name; args; body = Option.map (resolve_block env) body }
+let make_entry ?(has_linkage = false) name =
+  { name; has_linkage }
 
-and resolve_block env (PBlock items) =
-  let env' = Env.child_block env in
-  let rec loop env acc = function
-    | [] -> List.rev acc
-    | item::rest ->
-       let item', env' = resolve_block_item env item in
-       loop env' (item'::acc) rest
+let unique_alias var_name = make_entry (Id.var var_name)
+
+let resolve program =
+  let v =
+    object (self)
+      inherit [_] Parsetree_visitors.map
+
+      method resolve_param env name =
+        match Scoped_env.get_from_current env name with
+        | Some _ ->
+           raise (Redeclaration name)
+        | None ->
+           let alias = unique_alias name in
+           Scoped_env.add env name alias;
+           Printf.printf "adding %s\n" name;
+           alias.name
+
+      (* special constructor since we create scope
+       * within visit_fun_decl
+       *)
+      method resolve_block_no_new_scope env items =
+        List.map (self#visit_block_item env) items
+        
+      method! visit_block env items =
+        Scoped_env.with_scope ~env (fun inner_env ->
+            self#resolve_block_no_new_scope inner_env items)
+
+      method! visit_fun_decl env { name; args; body } =
+        (* check if not multiple redeclaration of the fun with internal linkage *)
+        Scoped_env.find env name
+        |> Option.iter (fun prev_entry ->
+               if Option.is_some (Scoped_env.get_from_current env name)
+                  && (not prev_entry.has_linkage)
+               then raise (Redeclaration name));
+
+        (* check if it's inner function definition *)
+        body
+        |> Option.iter (fun _ ->
+               if Scoped_env.depth env > 1
+               then raise (Inner_fun_definition name));
+
+        Scoped_env.add env name (make_entry ~has_linkage:true name);
+
+        Scoped_env.with_scope ~env (fun inner_env ->
+            let args' = List.map (self#resolve_param inner_env) args in
+            let body' = Option.map (self#resolve_block_no_new_scope inner_env) body in
+            { name; args = args'; body = body' })
+      
+      method! visit_var_decl env (name, init) =
+        match Scoped_env.get_from_current env name with
+        | Some _ ->
+           raise (Redeclaration name)
+        | None ->
+           let alias = unique_alias name in
+           Scoped_env.add env name alias;
+           let init' = Option.map (self#visit_expr env) init in
+           (alias.name, init')
+
+      method! visit_PVar env name =
+        match Scoped_env.find env name with
+        | None -> raise (Undeclared name)
+        | Some unique -> PVar unique.name
+
+      method! visit_PAssign env v exp =
+        match v with
+        | PVar _ ->
+           PAssign (self#visit_expr env v, self#visit_expr env exp)
+        | lvalue ->
+           raise (Invalid_lvalue lvalue)
+
+      method! visit_PFor env init cond post body loop_id =
+        let make_PFor env init =
+          PFor { init = init
+               ; cond = Option.map (self#visit_expr env) cond
+               ; post = Option.map (self#visit_expr env) post
+               ; body = self#visit_statement env body
+               ; loop_id = self#visit_loop_id env loop_id
+            }
+        in
+        match init with
+          | Some PInitExpr e ->
+             let init = PInitExpr (self#visit_expr env e) in
+             make_PFor env (Some init)
+          | Some PInitDecl d ->
+             Scoped_env.with_scope ~env (fun inner_env ->
+                 let init = PInitDecl (self#visit_var_decl inner_env d) in
+                 make_PFor inner_env (Some init))
+          | None ->
+             make_PFor env None
+
+      method! visit_PFun_call env name args =
+        match Scoped_env.find env name with
+        | None ->
+           raise (Undeclared_fun name)
+        | Some fun_alias ->
+           let args' = List.map (self#visit_expr env) args in
+           PFun_call (fun_alias.name, args')
+      
+    end
   in
-  PBlock (loop env' [] items)
-
-and resolve_block_item env = function
-  | PD (PVar_decl var_decl) ->
-     let var_decl', env' = resolve_var_decl env var_decl in
-     PD (PVar_decl var_decl'), env'
-  | PD (PFun_decl _) -> failwith "TODO"
-  | PS statement ->
-     PS (resolve_statement env statement), env
-
-and resolve_var_decl env (name, init) : var_decl * string Env.t =
-  match Env.get_from_current name env with
-  | Some _ ->
-     raise (Redeclaration name)
-  | None ->
-     let unique_name, env' = Env.unique_alias name env in
-     let init' = Option.map (resolve_expr env') init in
-     ((unique_name, init') : var_decl), env'
-
-and resolve_statement env = function
-  | PReturn expr -> PReturn (resolve_expr env expr)
-  | PBreak _ as s -> s
-  | PContinue _ as s -> s
-  | PIf { cond; _then; _else } ->
-     PIf { cond = resolve_expr env cond
-         ; _then = resolve_statement env _then
-         ; _else = Option.map (resolve_statement env) _else
-       }
-  | PWhile { cond; body; loop_id } ->
-     PWhile { cond = resolve_expr env cond
-            ; body = resolve_statement env body
-            ; loop_id
-       }
-  | PDoWhile { body; cond; loop_id } ->
-     PDoWhile { body = resolve_statement env body
-              ; cond = resolve_expr env cond
-              ; loop_id
-       }
-  | PFor { init; cond; post; body; loop_id } ->
-     let init', env' = match init with
-       | Some PInitExpr e ->
-          Some (PInitExpr (resolve_expr env e)), env
-       | Some PInitDecl d ->
-          let inner_env = Env.child_block env in 
-          let decl, env' = resolve_var_decl inner_env d in
-          Some (PInitDecl decl), env'
-       | None -> None, env
-     in
-     PFor { init = init'
-          ; cond = Option.map (resolve_expr env') cond
-          ; post = Option.map (resolve_expr env') post
-          ; body = resolve_statement env' body
-          ; loop_id
-       }
-  | PCompound block -> PCompound (resolve_block env block)
-  | PExpr expr -> PExpr (resolve_expr env expr)
-  | PNull -> PNull
-
-and resolve_expr env = function
-  | PVar name ->
-     begin match Env.get name env with
-     | None -> raise (Undeclared name)
-     | Some unique -> PVar unique
-     end
-  | PAssign (PVar _ as v, expr) ->
-     PAssign (resolve_expr env v, resolve_expr env expr)
-  | PAssign (lvalue, _) ->
-     raise (Invalid_lvalue lvalue)
-  | PTernary { cond; _then; _else } ->
-     PTernary { cond = resolve_expr env cond
-              ; _then = resolve_expr env _then
-              ; _else = resolve_expr env _else
-       }
-  | PConst _ as expr -> expr
-  | PUn_op (op, expr) ->
-     PUn_op (op, resolve_expr env expr)
-  | PBin_op (op, left, right) ->
-     PBin_op (op, resolve_expr env left, resolve_expr env right)
-  | _ -> failwith "TODO"
+  Scoped_env.with_scope (fun env ->
+      v#visit_program env program)

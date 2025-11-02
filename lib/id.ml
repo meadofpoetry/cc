@@ -24,7 +24,7 @@ let rec var =
   match Hashtbl.find_opt table string with
   | Some count ->
      incr count;
-     Printf.sprintf "%s%d" string !count
+     Printf.sprintf "%s_%d" string !count
   | None ->
      Hashtbl.add table string (ref (-1));
      var string
