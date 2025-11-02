@@ -13,6 +13,9 @@ class stream (t : < token : Lexer.t option >) =
   object(self)
     val mutable state = tokens#token
 
+    method is_eof =
+      Option.is_none state
+    
     method current =
       match state with
       | None -> raise Unexpected_eof
@@ -74,21 +77,78 @@ let rec parse (tokens : < token : Lexer.t option >) : Parsetree.program =
   res
 
 and parse_program stream =
-  Parsetree.PProgram(parse_fun stream)
+  let rec loop fs =
+    if stream#is_eof
+    then List.rev fs
+    else loop (parse_fun_decl stream :: fs)
+  in
+  Parsetree.PProgram(loop [])
 
-and parse_fun stream =
+and parse_decl stream =
+  stream#accept Lexer.TInt;
+  let name = token_value stream
+               (function (Lexer.TId n) -> n)
+               ~err_msg:"Expected name"
+  in
+  if stream#current.token == TLPar
+  then Parsetree.PFun_decl (parse_fun_decl_rest stream name)
+  else Parsetree.PVar_decl (parse_var_decl_rest stream name)
+
+and parse_fun_decl stream =
   stream#accept TInt;
   let name = token_value stream
                (function (Lexer.TId n) -> n)
                ~err_msg:"Expected function name"
   in
+  parse_fun_decl_rest stream name
+
+and parse_fun_decl_rest stream name =
   stream#accept TLPar;
-  stream#accept TVoid;
+  let args = parse_param_list stream in
   stream#accept TRPar;
-  Parsetree.PFunction {
-      name = name;
-      body = parse_block stream
-    }
+  let block =
+    if stream#current.token == TSemicol
+    then begin stream#accept TSemicol; None end
+    else Some (parse_block stream)
+  in
+  { name = name
+  ; args = args
+  ; body = block
+  }
+
+and parse_var_decl stream =
+  stream#accept Lexer.TInt;
+  let name = token_value stream
+               (function (Lexer.TId n) -> n)
+               ~err_msg:"Expected variable name"
+  in
+  parse_var_decl_rest stream name
+
+and parse_var_decl_rest stream name =
+  let init =
+    if stream#current.token != TEq then None
+    else begin
+        stream#accept TEq;
+        Some (parse_expr stream)
+      end
+  in
+  stream#accept TSemicol;
+  (name, init)
+
+and parse_param_list stream =
+  let rec loop args =
+    stream#accept Lexer.TInt;
+    let name = token_value stream
+                 (function (Lexer.TId n) -> n)
+                 ~err_msg:"Expected variable name"
+    in
+    if stream#current.token = TComma
+    then begin stream#accept TComma; loop (name :: args) end
+    else List.rev (name :: args)
+  in
+  if stream#current.token == TVoid
+  then begin stream#accept TVoid; [] end
+  else loop []
 
 and parse_block stream =
   let rec parse_items acc =
@@ -107,24 +167,8 @@ and parse_block stream =
 and parse_block_item stream =
   let next_tok = stream#current in
   if next_tok.token == TInt
-  then PD (parse_var_decl stream)
+  then PD (parse_decl stream)
   else PS (parse_statement stream)
-
-and parse_var_decl stream =
-  stream#accept TInt;
-  let name = token_value stream
-               (function (Lexer.TId n) -> n)
-               ~err_msg:"Expected variable name"
-  in
-  let init =
-    if stream#current.token != TEq then None
-    else begin
-        stream#accept TEq;
-        Some (parse_expr stream)
-      end
-  in
-  stream#accept TSemicol;
-  Parsetree.PVar_decl (name, init)
 
 and parse_statement stream =
   let next_tok = stream#current in
@@ -241,9 +285,14 @@ and parse_factor stream =
   | Lexer.TNumber i ->
      stream#skip;
      Parsetree.PConst i
+  (* Var or Fun_call *)
   | Lexer.TId name ->
      stream#skip;
-     Parsetree.PVar name
+     if stream#current.token = TLPar
+     then
+       let args = parse_arg_list stream in
+       Parsetree.PFun_call (name, args)
+     else Parsetree.PVar name
   | Lexer.TTilde | Lexer.TMinus | Lexer.TExclam -> (* ~-! *)
      let op   = parse_unop stream in
      let exp' = parse_factor stream in
@@ -254,6 +303,29 @@ and parse_factor stream =
      stream#accept Lexer.TRPar;
      exp'
   | _ -> unexpected_token "Expression:" ~actual:next_tok
+
+and parse_arg_list stream =
+  let rec parse_args () =
+    if stream#current.token = TRPar
+    then begin stream#accept TRPar; [] end
+    else
+      let exp = parse_expr stream in
+      match stream#current.token with
+      | TRPar ->
+         stream#accept TRPar;
+         [exp]
+      | TComma ->
+         parse_args_rest [exp]
+      | _ -> unexpected_token "Arg list:" ~actual:stream#current
+  and parse_args_rest args =
+    stream#accept TComma;
+    let exp = parse_expr stream in
+    if stream#current.token = TRPar
+    then begin stream#accept TRPar; List.rev (exp::args) end
+    else parse_args_rest (exp::args)
+  in
+  stream#accept TLPar;
+  parse_args ()
 
 and parse_unop stream =
   let next_tok = stream#next in

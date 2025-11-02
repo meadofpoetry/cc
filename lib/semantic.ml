@@ -1,10 +1,12 @@
 open Parsetree
 
 let fix_missing_return parsetree =
-  let rec apply (PProgram f) =
-    PProgram (apply_fun_def f)
-  and apply_fun_def (PFunction { name; body = PBlock statements }) =
-    PFunction { name; body = PBlock (apply_body statements) }
+  let rec apply (PProgram fs) =
+    PProgram (List.map apply_fun_def fs)
+  and apply_fun_def = function
+    | { name = "main"; args; body = Some (PBlock statements) } ->
+       { name = "main"; args; body = Some (PBlock (apply_body statements)) }
+    | f -> f
   and apply_body = function
     | [] -> [PS (PReturn (PConst 0))]
     | [PS (PReturn _)] as body -> body

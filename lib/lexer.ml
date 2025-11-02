@@ -46,6 +46,7 @@ and token =
   | TRBrace
   | TSemicol
   | TColon
+  | TComma
 
 exception Lexer_failure of { ch : char; pos : int }
 
@@ -229,6 +230,11 @@ and next_token state () =
      ignore @@ State.next state;
      let _end  = State.pos state in
      Some { token = TTilde; start = start; _end = _end }
+  | ',' ->
+     let start = State.pos state in
+     ignore @@ State.next state;
+     let _end  = State.pos state in
+     Some { token = TComma; start = start; _end = _end }
   | '?' ->
      let start = State.pos state in
      ignore @@ State.next state;

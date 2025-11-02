@@ -9,7 +9,7 @@ exception Invalid_lvalue : Parsetree.expr -> exn
 module Env = struct
   module M = Map.Make(String)
 
-  type 'a t = private 'a M.t list
+  type 'a t = 'a M.t list
 
   let empty = [M.empty]
 
@@ -31,11 +31,11 @@ module Env = struct
   
 end
 
-let rec resolve env (PProgram f) =
-  PProgram (resolve_fun_def env f)
+let rec resolve env (PProgram fs) =
+  PProgram (List.map (resolve_fun_def env) fs)
 
-and resolve_fun_def env (PFunction { name; body }) =
-  PFunction { name; body = resolve_block env body }
+and resolve_fun_def env { name; args; body } =
+  { name; args; body = Option.map (resolve_block env) body }
 
 and resolve_block env (PBlock items) =
   let env' = Env.child_block env in
@@ -48,20 +48,21 @@ and resolve_block env (PBlock items) =
   PBlock (loop env' [] items)
 
 and resolve_block_item env = function
-  | PD var_decl  ->
+  | PD (PVar_decl var_decl) ->
      let var_decl', env' = resolve_var_decl env var_decl in
-     PD var_decl', env'
+     PD (PVar_decl var_decl'), env'
+  | PD (PFun_decl _) -> failwith "TODO"
   | PS statement ->
      PS (resolve_statement env statement), env
 
-and resolve_var_decl env (PVar_decl (name, init)) =
+and resolve_var_decl env (name, init) : var_decl * string Env.t =
   match Env.get_from_current name env with
   | Some _ ->
      raise (Redeclaration name)
   | None ->
      let unique_name, env' = Env.unique_alias name env in
      let init' = Option.map (resolve_expr env') init in
-     PVar_decl (unique_name, init'), env'
+     ((unique_name, init') : var_decl), env'
 
 and resolve_statement env = function
   | PReturn expr -> PReturn (resolve_expr env expr)
@@ -122,3 +123,4 @@ and resolve_expr env = function
      PUn_op (op, resolve_expr env expr)
   | PBin_op (op, left, right) ->
      PBin_op (op, resolve_expr env left, resolve_expr env right)
+  | _ -> failwith "TODO"

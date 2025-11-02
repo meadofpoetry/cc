@@ -1,13 +1,17 @@
 
+exception Asm_error of int
+exception Linking_error of int
+
 let emit_lex = ref false
 let emit_parsetree = ref false
 let validate_only = ref false
 let emit_tacky = ref false
 let emit_codegen = ref false
+let compile_obj = ref false
 
-let filepath = ref ""
+let filepaths = Dynarray.create ()
 
-let usage = "cc [--lex|--parse|--validate|--tacky|--codegen] file.c"
+let usage = "cc [--lex|--parse|--validate|--tacky|--codegen|-c] file.c [file2.c file3.c]"
 
 let cpp file =
   let basename = Filename.(basename file |> chop_extension) in
@@ -81,14 +85,25 @@ let write_out_s asm =
         X86.pp_program asm);
   out_file
 
-let assemble asm_file =
-  let target = Filename.chop_extension !filepath in
-  let command = Printf.sprintf "gcc %s -o %s" asm_file target in
-  Sys.command command
+let assemble filepath asm_file =
+  let target = Filename.chop_extension filepath ^ ".o" in
+  let command = Printf.sprintf "gcc -c %s -o %s" asm_file target in
+  let exit_code = Sys.command command in
+  if exit_code != 0
+  then raise (Asm_error exit_code);
+  if not !compile_obj
+  then target
+  else raise Exit  
+
+let link target obj_files =
+  let command = "gcc " ^ (String.concat " " obj_files) ^ " -o " ^ target in
+  let exit_code = Sys.command command in
+  if exit_code != 0
+  then raise (Linking_error exit_code)
 
 let () =
   let set_filepath arg =
-    filepath := arg
+    Dynarray.add_last filepaths arg
   in
   let args =
     [
@@ -97,21 +112,27 @@ let () =
       ("--validate", Arg.Set validate_only, "semantic analysis and exit");
       ("--tacky", Arg.Set emit_tacky, "print tacky ir and exit");
       ("--codegen", Arg.Set emit_codegen, "print resulting assembly and exit");
+      ("-c", Arg.Set compile_obj, "compile object file and bypass lining step");
     ]
   in
   Arg.parse args set_filepath usage;
   try
-    let source_file = cpp !filepath in
-    In_channel.with_open_text source_file
-      (fun in_channel ->
-        lexer in_channel
-        |> parser
-        |> validate
-        |> ir_gen
-        |> codegen
-        |> write_out_s
-        |> assemble
-        |> exit)
+    let file_list = Dynarray.to_list filepaths in
+    let output_file = Filename.chop_extension @@ List.hd file_list in
+    file_list
+    |> List.map (fun filepath ->
+           let target = Filename.chop_extension @@ filepath in
+           let source_file = cpp filepath in
+           In_channel.with_open_text source_file
+             (fun in_channel ->
+               lexer in_channel
+               |> parser
+               |> validate
+               |> ir_gen
+               |> codegen
+               |> write_out_s
+               |> assemble target))
+    |> link output_file
   with Exit ->
         exit 0
      | Lexer.Lexer_failure { ch; pos } ->
@@ -131,6 +152,12 @@ let () =
         exit 1
      | Var_resolution.Undeclared v ->
         Format.eprintf "Validate: undeclared variable %s\n" v;
+        exit 1
+     | Asm_error exit_code ->
+        Format.eprintf "Asm: exit code %d\n" exit_code;
+        exit 1
+     | Linking_error exit_code ->
+        Format.eprintf "Linking: exit code %d\n" exit_code;
         exit 1
      | Failure msg ->
         Printf.eprintf "Error: %s\n" msg;

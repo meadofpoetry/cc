@@ -4,17 +4,23 @@ type 'a t = { value : 'a
             ; _end  : int
             }
 
-type program = PProgram of fun_definition
+type program = PProgram of fun_decl list
 [@@deriving show]
 
-and fun_definition = PFunction of { name : Id.t; body : block }
+and decl = PFun_decl of fun_decl
+         | PVar_decl of var_decl
+
+and fun_decl = { name : Id.t
+               ; args : Id.t list
+               ; body : block option
+               }
+
+and var_decl = Id.t * expr option
 
 and block = PBlock of block_item list
 
 and block_item = PS of statement
-               | PD of var_decl
-
-and var_decl = PVar_decl of Id.t * expr option
+               | PD of decl
 
 and statement = PReturn of expr
               | PIf of { cond : expr; _then : statement; _else : statement option }
@@ -38,6 +44,7 @@ and for_init = PInitDecl of var_decl
 and expr = PConst of int
          | PVar of Id.t
          | PAssign of expr * expr
+         | PFun_call of Id.t * expr list
          | PUn_op of un_op * expr
          | PBin_op of bin_op * expr * expr
          | PTernary of { cond : expr; _then : expr; _else : expr }

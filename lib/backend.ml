@@ -1,9 +1,13 @@
 open Parsetree
 
 let rec tacky : Parsetree.program -> Tacky.program =
-  fun (PProgram f) -> Tacky.Program (tacky_fun_decl f)
+  fun (PProgram fs) -> Tacky.Program (List.hd @@ List.map tacky_fun_decl fs)
 
-and tacky_fun_decl (PFunction { name; body }) =
+and tacky_decl = function
+  | PFun_decl fun_decl -> tacky_fun_decl fun_decl
+  | PVar_decl _var_decl -> failwith "Not implemented"
+
+and tacky_fun_decl { name; args = _; body } =
   let instr = tacky_fun_body body in
   Tacky.Function { name; body = instr }
 
@@ -14,10 +18,14 @@ and tacky_fun_body body =
     List.iter block_item items
   
   and block_item = function
-    | PD v -> var_decl v
+    | PD v -> decl v
     | PS s -> statement s
 
-  and var_decl (PVar_decl (name, init)) =
+  and decl = function
+    | PVar_decl vdecl -> var_decl vdecl
+    | PFun_decl _fdecl -> failwith "TODO"
+
+  and var_decl ((name, init) : var_decl) =
     match init with
     | None -> ()
     | Some e ->
@@ -159,9 +167,11 @@ and tacky_fun_body body =
        let i = Tacky.Binary { op = tacky_binop op; src1; src2; dst } in
        Dynarray.add_last instr i;
        dst
+    | _ -> failwith "TODO"
   in
-  
-  block body;
+
+  (* TODO *)
+  Option.iter block body;
   Dynarray.to_list instr
 
 and tacky_unop = function
