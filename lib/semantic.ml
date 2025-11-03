@@ -4,8 +4,8 @@ let fix_missing_return parsetree =
   let v = object (self)
      inherit [_] Parsetree_visitors.map as super
      method! visit_fun_decl () = function
-       | { name = "main"; args; body = Some statements } ->
-          { name = "main"
+       | { name; args; body = Some statements } ->
+          { name
           ; args
           ; body = Some (self#append_return statements)
           }
@@ -23,3 +23,4 @@ let validate parsetree =
   let parsetree' = fix_missing_return parsetree in
   Var_resolution.resolve parsetree'
   |> Annotate_loops.annotate
+  |> Typecheck.run

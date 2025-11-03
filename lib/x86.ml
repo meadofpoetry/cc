@@ -1,7 +1,7 @@
 
-type program = Program of fun_decl
+type program = fun_decl list
 
-and fun_decl = Function of { name : Id.t; instr : instr list }
+and fun_decl = { name : Id.t; instr : instr list }
 
 and instr = Mov of { src : operand; dst : operand }
           | Neg of operand
@@ -80,16 +80,19 @@ let epilog =
   ; Pop (Reg RBP)
   ]
 
-let rec pp_program out (Program f) =
+let rec pp_program out decls =
   let open Format in
   pp_print_string out "\t.section .note.GNU-stack,\"\",@progbits\n";
   pp_print_string out "\t.text\n";
-  pp_fun_decl out f;
+  ListLabels.iter decls ~f:(fun { name; _ } ->
+      fprintf out "\t.globl %s" name);
+  ListLabels.iter decls ~f:(fun f ->
+      pp_fun_decl out f);
   pp_print_flush out ();
 
-and pp_fun_decl out (Function { name; instr }) =
+and pp_fun_decl out { name; instr } =
   let open Format in
-  fprintf out "\t.globl %s" name;
+  
   pp_force_newline out ();
   fprintf out "%s:" name;
   pp_force_newline out ();

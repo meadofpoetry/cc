@@ -1,15 +1,15 @@
 open Parsetree
 
 let rec tacky : Parsetree.program -> Tacky.program =
-  fun fs -> Tacky.Program (List.hd @@ List.map tacky_fun_decl fs)
+  fun fs -> List.map tacky_fun_decl fs
 
 and tacky_decl = function
   | PFun_decl fun_decl -> tacky_fun_decl fun_decl
-  | PVar_decl _var_decl -> failwith "Not implemented"
+  | PVar_decl _var_decl -> failwith "Toplevel var declaration not implemented"
 
-and tacky_fun_decl { name; args = _; body } =
+and tacky_fun_decl { name; args; body } =
   let instr = tacky_fun_body body in
-  Tacky.Function { name; body = instr }
+  { name; params = args; body = instr }
 
 and tacky_fun_body body =
   let instr = Dynarray.create () in
@@ -23,7 +23,7 @@ and tacky_fun_body body =
 
   and decl = function
     | PVar_decl vdecl -> var_decl vdecl
-    | PFun_decl _fdecl -> failwith "TODO"
+    | PFun_decl _fdecl -> ()
 
   and var_decl ((name, init) : var_decl) =
     match init with
@@ -112,6 +112,11 @@ and tacky_fun_body body =
        let src = expr e in
        Dynarray.add_last instr (Tacky.Copy { src; dst });
        dst
+    | PFun_call (name, args) ->
+       let result = Tacky.Var (Id.temp ()) in
+       let arg_vars = List.map expr args in
+       Dynarray.add_last instr (Tacky.Fun_call { name; args = arg_vars; dst = result });
+       result
     | PTernary { cond; _then; _else } ->
        let false_label = Id.label "tern_false" in
        let end_label = Id.label "tern_end" in
@@ -167,7 +172,6 @@ and tacky_fun_body body =
        let i = Tacky.Binary { op = tacky_binop op; src1; src2; dst } in
        Dynarray.add_last instr i;
        dst
-    | _ -> failwith "TODO"
   in
 
   (* TODO *)
@@ -194,14 +198,14 @@ and tacky_binop = function
   | PAnd | POr -> failwith "unreachable"
 
 let rec compile : Tacky.program -> X86.program =
-  fun (Tacky.Program f) -> X86.Program (comp_fun_decl f)
+  fun (fs) -> List.map comp_fun_decl fs
 
-and comp_fun_decl (Tacky.Function { name; body }) =
+and comp_fun_decl { name; params = _; body } =
   let instr = List.concat_map comp_instr body in
   let alloc, instr' = replace_pseudo instr in
   let instr'' = fix_instr instr' in
   let instr''' = insert_prolog_epilog alloc instr'' in
-  X86.Function { name; instr = instr''' }
+  { name; instr = instr''' }
 
 and comp_instr = function
   | Tacky.Return v ->
@@ -226,6 +230,7 @@ and comp_instr = function
      ]
   | Tacky.Label label ->
      [ X86.Label label ]
+  | _ -> failwith "Funcall not impl"
 
 and comp_unary op src dst =
   match op with

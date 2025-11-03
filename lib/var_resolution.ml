@@ -64,7 +64,6 @@ let resolve program =
         | None ->
            let alias = unique_alias name in
            Scoped_env.add env name alias;
-           Printf.printf "adding %s\n" name;
            alias.name
 
       (* special constructor since we create scope

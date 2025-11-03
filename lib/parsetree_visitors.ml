@@ -77,9 +77,12 @@ object (self : 'self)
       }
 
   method visit_PFor env init cond post body loop_id =
-    PFor { init = Option.map (self#visit_for_init env) init
-         ; cond = Option.map (self#visit_expr env) cond
-         ; post = Option.map (self#visit_expr env) post
+    let init' = Option.map (self#visit_for_init env) init in
+    let cond' = Option.map (self#visit_expr env) cond in
+    let post' = Option.map (self#visit_expr env) post in
+    PFor { init = init'
+         ; cond = cond'
+         ; post = post'
          ; body = self#visit_statement env body
          ; loop_id = self#visit_loop_id env loop_id
       }

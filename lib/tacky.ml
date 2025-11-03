@@ -1,9 +1,10 @@
 
-type program = Program of fun_decl [@@deriving show]
+type program = fun_decl list [@@deriving show]
 
-and fun_decl = Function of { name : Id.t; body : instr list }
+and fun_decl = { name : Id.t; params : Id.t list; body : instr list }
 
-and instr = Return of value
+and instr = Fun_call of { name : Id.t; args : value list; dst : value }
+          | Return of value
           | Unary  of { op : un_op; src : value; dst : value }
           | Binary of { op : bin_op; src1 : value; src2 : value; dst : value }
           | Copy of { src : value; dst : value }
