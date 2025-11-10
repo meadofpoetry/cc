@@ -1,4 +1,8 @@
 
+type reg32 = EAX | ECX | EDX | EDI | ESI
+
+type reg64 = RBP | RSP | RAX | RCX | RDX | RDI | RSI | R8 | R9 | R10 | R11
+
 type program = fun_decl list
 
 and fun_decl = { name : Id.t; instr : instr list }
@@ -33,13 +37,24 @@ and instr = Mov of { src : operand; dst : operand }
           | Ret
           (* Jump label *)
           | Label of Id.t
+          (* Call *)
+          | Call of Id.t
 
 and operand = Imm of int
-            | Reg of reg
+            | Reg32 of reg32
+            | Reg of reg64
             | Pseudo of Id.t
             | Stack of int
 
-and reg = RAX | RDX | RBP | RSP | R10 | R11
+(* TODO *)
+and cond = E | NE | G | GE | L | LE
+
+let reg32_to_reg = function
+  | EAX -> RAX
+  | ECX -> RCX
+  | EDX -> RDX
+  | EDI -> RDI
+  | ESI -> RSI
 
 let map_operand f = function
   | Mov { src; dst } -> Mov { src = f src; dst = f dst }
@@ -68,11 +83,13 @@ let map_operand f = function
   | Pop op -> Pop (f op)
   | Ret -> Ret
   | Label _ as instr -> instr
+  | Call _ as instr -> instr
 
-let prolog argc =
+let prolog offset =
+  let aligned_offset = (offset + 15) / 16 * 16 in
   [ Push (Reg RBP)
   ; Mov  { src = Reg RSP; dst = Reg RBP }
-  ; Sub  { value = Imm (argc * 8); dst = Reg RSP }
+  ; Sub  { value = Imm aligned_offset; dst = Reg RSP }
   ]
 
 let epilog =
@@ -85,7 +102,7 @@ let rec pp_program out decls =
   pp_print_string out "\t.section .note.GNU-stack,\"\",@progbits\n";
   pp_print_string out "\t.text\n";
   ListLabels.iter decls ~f:(fun { name; _ } ->
-      fprintf out "\t.globl %s" name);
+      fprintf out "\t.globl %s\n" name);
   ListLabels.iter decls ~f:(fun f ->
       pp_fun_decl out f);
   pp_print_flush out ();
@@ -152,24 +169,46 @@ and pp_instr out = function
      emit out "ret" []
   | Label label ->
      emit_label out label
+  | Call label ->
+     emit_funcall out label
 
 and pp_operand out = function
   | Imm i ->
      Format.fprintf out "$%d" i
   | Reg RAX ->
      Format.pp_print_string out "%rax"
+  | Reg RCX ->
+     Format.pp_print_string out "%rcx"
   | Reg RDX ->
      Format.pp_print_string out "%rdx"
+  | Reg RDI ->
+     Format.pp_print_string out "%rdi"
+  | Reg RSI ->
+     Format.pp_print_string out "%rsi"
   | Reg RBP ->
      Format.pp_print_string out "%rbp"
   | Reg RSP ->
      Format.pp_print_string out "%rsp"
+  | Reg R8 ->
+     Format.pp_print_string out "%r8"
+  | Reg R9 ->
+     Format.pp_print_string out "%r9"
   | Reg R10 ->
      Format.pp_print_string out "%r10"
   | Reg R11 ->
      Format.pp_print_string out "%r11"
+  | Reg32 EAX ->
+     Format.pp_print_string out "%eax"
+  | Reg32 ECX ->
+     Format.pp_print_string out "%ecx"
+  | Reg32 EDX ->
+     Format.pp_print_string out "%edx"
+  | Reg32 EDI ->
+     Format.pp_print_string out "%edi"
+  | Reg32 ESI ->
+     Format.pp_print_string out "%esi"
   | Stack off ->
-     Format.fprintf out "-%d(%%rbp)" (off * 8)
+     Format.fprintf out "%d(%%rbp)" off
   | Pseudo name ->
      Format.fprintf out "P{%s}" name
 
@@ -185,3 +224,7 @@ and emit_jmp out instr label =
 and emit_label out label =
   let open Format in
   fprintf out ".L%s:" label
+
+and emit_funcall out label =
+  let open Format in
+  fprintf out "\tcall\t%s" label

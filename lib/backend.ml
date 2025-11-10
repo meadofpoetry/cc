@@ -1,15 +1,16 @@
 open Parsetree
 
 let rec tacky : Parsetree.program -> Tacky.program =
-  fun fs -> List.map tacky_fun_decl fs
+  fun fs -> List.filter_map tacky_fun_decl fs
 
 and tacky_decl = function
   | PFun_decl fun_decl -> tacky_fun_decl fun_decl
   | PVar_decl _var_decl -> failwith "Toplevel var declaration not implemented"
 
 and tacky_fun_decl { name; args; body } =
-  let instr = tacky_fun_body body in
-  { name; params = args; body = instr }
+  body
+  |> Option.map (fun body ->
+         Tacky.{ name; params = args; body = tacky_fun_body body })
 
 and tacky_fun_body body =
   let instr = Dynarray.create () in
@@ -174,8 +175,7 @@ and tacky_fun_body body =
        dst
   in
 
-  (* TODO *)
-  Option.iter block body;
+  block body;
   Dynarray.to_list instr
 
 and tacky_unop = function
@@ -200,12 +200,36 @@ and tacky_binop = function
 let rec compile : Tacky.program -> X86.program =
   fun (fs) -> List.map comp_fun_decl fs
 
-and comp_fun_decl { name; params = _; body } =
-  let instr = List.concat_map comp_instr body in
+and comp_fun_decl { name; params; body } =
+  let instr =
+    comp_fun_args params @ List.concat_map comp_instr body
+  in
   let alloc, instr' = replace_pseudo instr in
   let instr'' = fix_instr instr' in
   let instr''' = insert_prolog_epilog alloc instr'' in
   { name; instr = instr''' }
+
+and comp_fun_args args =
+  let open X86 in
+  
+  let regs = [ RDI; RSI; RDX; RCX; R8; R9 ] in
+
+  let rec reg_args acc regs args =
+    match regs, args with
+    | r::regs', a::args' ->
+       let i = Mov { src = Reg r; dst = Pseudo a } in
+       reg_args (i::acc) regs' args'
+    | _, [] ->
+       List.rev acc
+    | [], _ ->
+       stack_args acc 16 args
+  and stack_args acc n = function
+    | [] -> List.rev acc
+    | a::args' ->
+       let i = Mov { src = Stack n; dst = Pseudo a } in
+       stack_args (i::acc) (n + 8) args'
+  in
+  reg_args [] regs args
 
 and comp_instr = function
   | Tacky.Return v ->
@@ -230,7 +254,71 @@ and comp_instr = function
      ]
   | Tacky.Label label ->
      [ X86.Label label ]
-  | _ -> failwith "Funcall not impl"
+  | Tacky.Fun_call { name; args; dst } ->
+     comp_fun_call name args dst
+
+and comp_fun_call name args dst =
+  let open X86 in
+  let instr = Dynarray.create () in
+  let emit i =
+    Dynarray.add_last instr i
+  in
+
+  let fun_sym =
+    if Typecheck.is_defined name then name
+    else name ^ "@PLT"
+  in
+  
+  let regs = [ RDI; RSI; RDX; RCX; R8; R9 ] in
+
+  let rec part_args acc reg args =
+    match reg, args with
+    | r::reg', a::args' -> part_args ((a, r)::acc) reg' args'
+    | _, args -> List.rev acc, List.rev args
+  in
+
+  let reg_args, stack_args = part_args [] regs args in
+
+  (* Adjust stack alignment *)
+  let stack_padding =
+    if (List.length stack_args mod 2) != 0
+    then 8
+    else 0
+  in
+
+  if stack_padding > 0
+  then emit (Sub { value = Imm 8; dst = Reg RSP });
+
+  (* Pass args to registers *)
+  ListLabels.iter reg_args ~f:(fun (arg, reg) ->
+      let asm_arg = val_to_reg arg in
+      emit (Mov { src = asm_arg; dst = Reg reg }));
+
+  (* Pass args on stack *)
+  ListLabels.iter stack_args ~f:(fun arg ->
+      let asm_arg = val_to_reg arg in
+      match asm_arg with
+      | Reg _ | Imm _ ->
+         emit (Push asm_arg)
+      | Reg32 r ->
+         emit (Push (Reg (reg32_to_reg r)))
+      | _ ->
+         emit (Mov { src = asm_arg; dst = Reg RAX });
+         emit (Push (Reg RAX)));
+
+  emit (Call fun_sym);
+
+  (* Adjust stack pointer *)
+  let bytes_to_remove = 8 * List.length stack_args + stack_padding in
+  if bytes_to_remove > 0
+  then emit (Add { value = Imm bytes_to_remove; dst = Reg RSP });
+
+  (* Retval *)
+  let dst_asm = val_to_reg dst in
+  emit (Mov { src = Reg RAX; dst = dst_asm });
+  
+  Dynarray.to_list instr
+  
 
 and comp_unary op src dst =
   match op with
@@ -293,21 +381,21 @@ and val_to_reg = function
   | Tacky.Var id -> X86.Pseudo id
 
 and replace_pseudo : X86.instr list -> int * X86.instr list = fun instr ->
-  let arg = ref 0 in
+  let next_off = ref 0 in
   let mapping = Hashtbl.create 10 in
   let replace = function
     | X86.Pseudo id ->
        begin match Hashtbl.find_opt mapping id with
        | Some off -> X86.Stack off
        | None ->
-          incr arg;
-          Hashtbl.add mapping id !arg;
-          X86.Stack !arg
+          next_off := !next_off - 8;
+          Hashtbl.add mapping id !next_off;
+          X86.Stack !next_off
        end
     | other -> other
   in
   let instr' = List.map (X86.map_operand replace) instr in
-  !arg, instr'
+  Int.abs !next_off, instr'
 
 and fix_instr instr =
   let apply = function

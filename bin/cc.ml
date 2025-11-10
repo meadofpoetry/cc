@@ -86,7 +86,7 @@ let write_out_s asm =
   out_file
 
 let assemble filepath asm_file =
-  let target = Filename.chop_extension filepath ^ ".o" in
+  let target = filepath ^ ".o" in
   let command = Printf.sprintf "gcc -c %s -o %s" asm_file target in
   let exit_code = Sys.command command in
   if exit_code != 0
@@ -117,11 +117,13 @@ let () =
   in
   Arg.parse args set_filepath usage;
   try
+    if Dynarray.is_empty filepaths then failwith "No files provided";
+
     let file_list = Dynarray.to_list filepaths in
     let output_file = Filename.chop_extension @@ List.hd file_list in
     file_list
     |> List.map (fun filepath ->
-           let target = Filename.chop_extension @@ filepath in
+           let target = Filename.chop_extension filepath in
            let source_file = cpp filepath in
            In_channel.with_open_text source_file
              (fun in_channel ->

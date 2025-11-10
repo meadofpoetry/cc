@@ -56,4 +56,6 @@ let run parsetree =
       
     end
   in
+  Hashtbl.clear symbols;
+  Hashtbl.clear fun_def;
   v#visit_program () parsetree
