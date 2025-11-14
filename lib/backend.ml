@@ -1,13 +1,13 @@
 open Parsetree
 
 let rec tacky : Parsetree.program -> Tacky.program =
-  fun fs -> List.filter_map tacky_fun_decl fs
+  fun fs -> List.filter_map tacky_decl fs
 
 and tacky_decl = function
   | PFun_decl fun_decl -> tacky_fun_decl fun_decl
   | PVar_decl _var_decl -> failwith "Toplevel var declaration not implemented"
 
-and tacky_fun_decl { name; args; body } =
+and tacky_fun_decl { name; args; body; storage_class = _ } =
   body
   |> Option.map (fun body ->
          Tacky.{ name; params = args; body = tacky_fun_body body })
@@ -26,7 +26,7 @@ and tacky_fun_body body =
     | PVar_decl vdecl -> var_decl vdecl
     | PFun_decl _fdecl -> ()
 
-  and var_decl ((name, init) : var_decl) =
+  and var_decl ({ name; init; storage_class = _ } : var_decl) =
     match init with
     | None -> ()
     | Some e ->
@@ -265,7 +265,7 @@ and comp_fun_call name args dst =
   in
 
   let fun_sym =
-    if Typecheck.is_defined name then name
+    if Typecheck.Symbols.is_defined name then name
     else name ^ "@PLT"
   in
   

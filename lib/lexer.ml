@@ -32,6 +32,8 @@ and token =
   | TInt
   | TVoid
   | TReturn
+  | TStatic
+  | TExtern
   | TDo
   | TWhile
   | TFor
@@ -296,6 +298,10 @@ and identifier state ch =
      Some { token = TVoid; start = start; _end = _end }
   | "int" ->
      Some { token = TInt; start = start; _end = _end }
+  | "static" ->
+     Some { token = TStatic; start = start; _end = _end }
+  | "extern" ->
+     Some { token = TExtern; start = start; _end = _end }
   | "if" ->
      Some { token = TIf; start = start; _end = _end }
   | "else" ->

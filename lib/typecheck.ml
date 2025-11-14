@@ -2,51 +2,210 @@
 type ty = TyInt
         | TyFun of ty list
 
-let symbols : (string, ty) Hashtbl.t = Hashtbl.create 16
 
-let fun_def : (string, bool) Hashtbl.t = Hashtbl.create 16
+module Symbols : sig
 
-let is_defined name =
-  Hashtbl.find_opt fun_def name
-  |> Option.value ~default:false
+  type attr = AttrFun of { defined : bool; global : bool }
+            | AttrStatic of { init : init_value; global : bool }
+            | AttrLocal
+  and init_value = Tentative | Init of int | NoInit
+
+  val clear : unit -> unit
+  
+  val add : name:string -> attr:attr -> ty -> unit
+
+  val get : name:string -> (ty * attr) option
+
+  val get_exn : name:string -> ty * attr
+  
+  val get_type : name:string -> ty option
+
+  val get_type_exn : name:string -> ty
+  
+  val is_defined : string -> bool
+
+  val is_global : string -> bool
+  
+end = struct
+
+  type attr = AttrFun of { defined : bool; global : bool }
+            | AttrStatic of { init : init_value; global : bool }
+            | AttrLocal
+  and init_value = Tentative | Init of int | NoInit
+
+  let symbols : (string, (ty * attr)) Hashtbl.t = Hashtbl.create 16
+
+  let clear () =
+    Hashtbl.clear symbols
+  
+  let add ~name ~attr ty =
+    Hashtbl.add symbols name (ty, attr)
+
+  let get ~name =
+    Hashtbl.find_opt symbols name
+
+  let get_exn ~name =
+    match get ~name with
+    | Some v -> v
+    | None -> failwith (Printf.sprintf "Symbol not found: %s" name)
+  
+  let get_type ~name =
+    Hashtbl.find_opt symbols name
+    |> Option.map fst
+
+  let get_type_exn ~name =
+    get_exn ~name |> fst
+  
+  let is_defined name =
+    match Hashtbl.find_opt symbols name with
+    | Some (TyFun _, (AttrFun { defined; global = _ })) ->
+       defined
+    | _ ->
+       false
+
+  let is_global name =
+    match Hashtbl.find_opt symbols name with
+    | Some (_, (AttrFun { defined = _; global })) ->
+       global
+    | Some (_, (AttrStatic { init = _; global })) ->
+       global
+    | _ ->
+       false
+  
+end
+
+let var_init name =
+  match Symbols.get ~name with
+  | Some (_, (Symbols.AttrStatic { init; global = _ })) -> Some init
+  | _ -> None
 
 let run parsetree =
   let v =
-    object
+    object (self)
       inherit [_] Parsetree_visitors.map as super
 
-      method! visit_fun_decl () { name; args; body } =
+      (* Workaround to distinct bw toplevel and local var decls *)
+      method! visit_program () decls =
+        let open Parsetree in
+        let process_decl = function
+          | PFun_decl fdecl -> PFun_decl (self#visit_fun_decl () fdecl)
+          | PVar_decl vdecl -> PVar_decl (self#toplevel_var_decl vdecl)
+        in
+        List.map process_decl decls
+      
+      method! visit_fun_decl () { name; args; body; storage_class } =
         let ty = TyFun (List.map (fun _ -> TyInt) args) in
+        let global = ref (storage_class <> Some PStatic) in
 
-        Hashtbl.find_opt symbols name
+        Symbols.get_type ~name
         |> Option.iter (fun prev_decl ->
                if prev_decl <> ty
                then failwith "Incompatible function declarations";
 
-               if is_defined name && Option.is_some body
-               then failwith "Function redefinition");
+               if Symbols.is_defined name && Option.is_some body
+               then failwith "Function redefinition";
 
-        Hashtbl.add symbols name ty;
+               if Symbols.is_global name && storage_class = Some PStatic
+               then failwith "Static function declaration follows non-static";
+               
+               global := Symbols.is_global name);
+
+        let attr = Symbols.AttrFun { defined = Symbols.is_defined name || Option.is_some body
+                                   ; global = !global
+                                   }
+        in
+        Symbols.add ~name ~attr ty;
         body
         |> Option.iter (fun _ ->
-               Hashtbl.add fun_def name true;
-               List.iter (fun param -> Hashtbl.add symbols param TyInt) args);
+               List.iter (fun param -> Symbols.add ~name:param ~attr:Symbols.AttrLocal TyInt) args);
         
-        super#visit_fun_decl () { name; args; body }
-      
-      method! visit_var_decl () (name, expr) =
-        Hashtbl.add symbols name TyInt;
-        super#visit_var_decl () (name, expr)
+        super#visit_fun_decl () { name; args; body; storage_class }
 
+      method toplevel_var_decl Parsetree.{ name; init; storage_class } =
+        let default_init = match init with
+          | Some (PConst i) -> Symbols.Init i
+          | None when storage_class = Some PExtern -> Symbols.NoInit
+          | None -> Symbols.Tentative
+          | Some _ -> failwith "Non-constant initializer"
+        in
+        let global = ref (storage_class <> Some PStatic) in
+        (*   (storage_class = Some PExtern && Symbols.is_global name) *)
+        (*   ||  *)
+        (* in *)
+
+        Symbols.get_type ~name
+        |> Option.iter (fun prev_ty ->
+               if prev_ty <> TyInt
+               then failwith "Function redeclared as var";
+
+               if storage_class = Some PExtern
+               then global := Symbols.is_global name
+               else if Symbols.is_global name <> !global
+               then failwith "Conflicting var linkage");
+        
+        let attr_init = match var_init name, default_init with
+          | None, _ ->
+             default_init
+          | Some (Symbols.Init _), Symbols.Init _ ->
+             failwith "Conflicting var decl"
+          | _, Symbols.Init _ ->
+             default_init
+          | Some Symbols.Tentative, _ ->
+             Symbols.Tentative
+          | Some initial, _ ->
+             initial
+        in
+        let attr = Symbols.AttrStatic { init = attr_init; global = !global } in
+        Symbols.add ~name ~attr TyInt;
+        
+        super#visit_var_decl () { name; init; storage_class }
+
+      (* Local var decls *)
+      method! visit_var_decl () { name; init; storage_class } =
+        let open Parsetree in
+        begin match storage_class with
+        | Some PExtern ->
+           if Option.is_some init
+           then failwith "Initialized on local extern var";
+
+           begin match Symbols.get_type ~name with
+           | Some prev_ty ->
+              if prev_ty <> TyInt
+              then failwith "Redeclared local var type"
+           | None ->
+              let attr = Symbols.AttrStatic { init = Symbols.NoInit; global = true } in
+              Symbols.add ~name ~attr TyInt
+           end
+        | Some PStatic ->
+           let init = match init with
+             | Some (PConst i) ->
+                Symbols.Init i
+             | None ->
+                Symbols.Init 0
+             | _ ->
+                failwith "Non-constant init on local static var"
+           in
+           let attr = Symbols.AttrStatic { init; global = true } in
+           Symbols.add ~name ~attr TyInt
+        | None ->
+           Symbols.add ~name ~attr:Symbols.AttrLocal TyInt
+        end;
+        super#visit_var_decl () { name; init; storage_class }
+
+      method! visit_PInitDecl env decl =
+        if Option.is_some decl.storage_class
+        then failwith "For-loop var declaration can't contain storage class";
+        PInitDecl (self#visit_var_decl env decl)
+      
       method! visit_PVar () id =
-        begin match Hashtbl.find symbols id with
+        begin match Symbols.get_type_exn ~name:id with
         | TyInt -> ()
         | _ -> failwith "Function name used as var"
         end;
         super#visit_PVar () id
       
       method! visit_PFun_call () name args =
-        begin match Hashtbl.find symbols name with
+        begin match Symbols.get_type_exn ~name with
         | TyInt -> failwith "Variable called as function"
         | TyFun tys when List.length tys <> List.length args ->
            failwith "Wrong number of arguments"
@@ -56,6 +215,5 @@ let run parsetree =
       
     end
   in
-  Hashtbl.clear symbols;
-  Hashtbl.clear fun_def;
+  Symbols.clear ();
   v#visit_program () parsetree

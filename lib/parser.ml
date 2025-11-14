@@ -50,6 +50,11 @@ let is_binop = function
     |  Lexer.TAmpAmp | Lexer.TBarBar | Lexer.TQuestion -> true
   | _ -> false
 
+let is_specifier = function
+  | Lexer.TStatic | Lexer.TExtern -> true
+  | Lexer.TInt -> true
+  | _ -> false
+
 let precedence = function
   | Lexer.TStar | Lexer.TSlash | Lexer.TPercent -> 50 
   | Lexer.TPlus | TMinus -> 45
@@ -70,6 +75,14 @@ let optional (type a) ~(parser : stream -> a) ~(next_token : Lexer.token) (strea
       Some res
     end
 
+let list (type a) ~(parser : stream -> a option) (stream : stream) : a list =
+  let rec loop acc =
+    match parser stream with
+    | None -> List.rev acc
+    | Some v -> loop (v :: acc)
+  in
+  loop []
+
 let rec parse (tokens : < token : Lexer.t option >) : Parsetree.program =
   let s = new stream tokens in
   let res = parse_program s in
@@ -80,29 +93,41 @@ and parse_program stream =
   let rec loop fs =
     if stream#is_eof
     then List.rev fs
-    else loop (parse_fun_decl stream :: fs)
+    else loop (parse_decl stream :: fs)
   in
   loop []
 
+and parse_specifier (stream : stream) =
+  if is_specifier stream#current.token
+  then Some stream#next.token
+  else None
+
 and parse_decl stream =
-  stream#accept Lexer.TInt;
+  let specifiers = list ~parser:parse_specifier stream in
   let name = token_value stream
                (function (Lexer.TId n) -> n)
                ~err_msg:"Expected name"
   in
   if stream#current.token == TLPar
-  then Parsetree.PFun_decl (parse_fun_decl_rest stream name)
-  else Parsetree.PVar_decl (parse_var_decl_rest stream name)
+  then Parsetree.PFun_decl (parse_fun_decl_rest stream specifiers name)
+  else Parsetree.PVar_decl (parse_var_decl_rest stream specifiers name)
 
 and parse_fun_decl stream =
-  stream#accept TInt;
+  let specifiers = list ~parser:parse_specifier stream in
   let name = token_value stream
                (function (Lexer.TId n) -> n)
                ~err_msg:"Expected function name"
   in
-  parse_fun_decl_rest stream name
+  parse_fun_decl_rest stream specifiers name
 
-and parse_fun_decl_rest stream name =
+and parse_fun_decl_rest stream specifiers name =
+  let open Lexer in
+  let storage_class = match specifiers with
+    | [ TStatic; TInt ] | [ TInt; TStatic ] -> Some Parsetree.PStatic
+    | [ TExtern; TInt ] | [ TInt; TExtern ] -> Some Parsetree.PExtern
+    | [ TInt ] -> None
+    | l -> failwith (Format.asprintf "Unexpected function specifiers: %a\n" (Format.pp_print_list Lexer.pp_token) l)
+  in
   stream#accept TLPar;
   let args = parse_param_list stream in
   stream#accept TRPar;
@@ -114,17 +139,24 @@ and parse_fun_decl_rest stream name =
   { name = name
   ; args = args
   ; body = block
+  ; storage_class = storage_class
   }
 
 and parse_var_decl stream =
-  stream#accept Lexer.TInt;
+  let specifiers = list ~parser:parse_specifier stream in
   let name = token_value stream
                (function (Lexer.TId n) -> n)
                ~err_msg:"Expected variable name"
   in
-  parse_var_decl_rest stream name
+  parse_var_decl_rest stream specifiers name
 
-and parse_var_decl_rest stream name =
+and parse_var_decl_rest stream specifiers name =
+  let storage_class = match specifiers with
+    | [ TStatic; TInt ] | [ TInt; TStatic ] -> Some Parsetree.PStatic
+    | [ TExtern; TInt ] | [ TInt; TExtern ] -> Some Parsetree.PExtern
+    | [ TInt ] -> None
+    | l -> failwith (Format.asprintf "Unexpected var specifiers: %a\n" (Format.pp_print_list Lexer.pp_token) l)
+  in
   let init =
     if stream#current.token != TEq then None
     else begin
@@ -133,7 +165,7 @@ and parse_var_decl_rest stream name =
       end
   in
   stream#accept TSemicol;
-  (name, init)
+  { name; init; storage_class }
 
 and parse_param_list stream =
   let rec loop args =
@@ -166,7 +198,7 @@ and parse_block stream =
 
 and parse_block_item stream =
   let next_tok = stream#current in
-  if next_tok.token == TInt
+  if is_specifier next_tok.token
   then PD (parse_decl stream)
   else PS (parse_statement stream)
 
@@ -240,7 +272,7 @@ and parse_for_init stream : Parsetree.for_init option =
   | TSemicol ->
      stream#skip;
      None
-  | TInt ->
+  | tok when is_specifier tok ->
      Some (Parsetree.PInitDecl (parse_var_decl stream))
   | _ ->
      let e = parse_expr stream in

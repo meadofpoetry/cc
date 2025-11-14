@@ -4,7 +4,7 @@ type 'a t = { value : 'a
             ; _end  : int
             }
 
-type program = fun_decl list
+type program = decl list
 [@@deriving show]
 
 and decl = PFun_decl of fun_decl
@@ -13,9 +13,15 @@ and decl = PFun_decl of fun_decl
 and fun_decl = { name : Id.t
                ; args : Id.t list
                ; body : block option
+               ; storage_class : storage_class option
                }
 
-and var_decl = Id.t * expr option
+and var_decl = { name : Id.t
+               ; init : expr option
+               ; storage_class : storage_class option
+               }
+
+and storage_class = PStatic | PExtern
 
 and block = block_item list
 

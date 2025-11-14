@@ -57,6 +57,9 @@ let resolve program =
     object (self)
       inherit [_] Parsetree_visitors.map
 
+      method is_toplevel_scope env =
+        Scoped_env.depth env <= 1
+      
       method resolve_param env name =
         match Scoped_env.get_from_current env name with
         | Some _ ->
@@ -76,7 +79,7 @@ let resolve program =
         Scoped_env.with_scope ~env (fun inner_env ->
             self#resolve_block_no_new_scope inner_env items)
 
-      method! visit_fun_decl env { name; args; body } =
+      method! visit_fun_decl env { name; args; body; storage_class } =
         (* check if not multiple redeclaration of the fun with internal linkage *)
         Scoped_env.find env name
         |> Option.iter (fun prev_entry ->
@@ -84,29 +87,47 @@ let resolve program =
                   && (not prev_entry.has_linkage)
                then raise (Redeclaration name));
 
-        (* check if it's inner function definition *)
-        body
-        |> Option.iter (fun _ ->
-               if Scoped_env.depth env > 1
-               then raise (Inner_fun_definition name));
+        (* inner functions *)
+        if not (self#is_toplevel_scope env)
+        then begin
+            if Option.is_some body
+            then raise (Inner_fun_definition name);
+
+            if storage_class = Some PStatic
+            then failwith "Inner static function declaration";
+          end;
 
         Scoped_env.add env name (make_entry ~has_linkage:true name);
 
         Scoped_env.with_scope ~env (fun inner_env ->
             let args' = List.map (self#resolve_param inner_env) args in
             let body' = Option.map (self#resolve_block_no_new_scope inner_env) body in
-            { name; args = args'; body = body' })
-      
-      method! visit_var_decl env (name, init) =
-        match Scoped_env.get_from_current env name with
-        | Some _ ->
-           raise (Redeclaration name)
-        | None ->
-           let alias = unique_alias name in
-           Scoped_env.add env name alias;
-           let init' = Option.map (self#visit_expr env) init in
-           (alias.name, init')
+            { name; args = args'; body = body'; storage_class })
 
+      method! visit_var_decl env { name; init; storage_class } =
+        if self#is_toplevel_scope env
+        then self#var_decl_extern env { name; init; storage_class }
+        else self#var_decl_in_fun env { name; init; storage_class }
+
+      method var_decl_extern env { name; init; storage_class } =
+        let entry = make_entry ~has_linkage:true name in
+        Scoped_env.add env name entry;
+        { name; init = Option.map (self#visit_expr env) init; storage_class }
+        
+      method var_decl_in_fun env { name; init; storage_class } =
+        match Scoped_env.get_from_current env name with
+        | Some entry when not (entry.has_linkage && storage_class = Some PExtern) ->
+           (* When both vars do not have linkage, they refer to different objects *)
+           raise (Redeclaration name)
+        | _ -> match storage_class with
+               | Some PExtern ->
+                  self#var_decl_extern env { name; init; storage_class }
+               | _ ->
+                  let alias = unique_alias name in
+                  Scoped_env.add env name alias;
+                  let init' = Option.map (self#visit_expr env) init in
+                  { name = alias.name; init = init'; storage_class }
+      
       method! visit_PVar env name =
         match Scoped_env.find env name with
         | None -> raise (Undeclared name)

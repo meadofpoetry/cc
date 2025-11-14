@@ -4,10 +4,11 @@ let fix_missing_return parsetree =
   let v = object (self)
      inherit [_] Parsetree_visitors.map as super
      method! visit_fun_decl () = function
-       | { name; args; body = Some statements } ->
+       | { name; args; body = Some statements; storage_class } ->
           { name
           ; args
           ; body = Some (self#append_return statements)
+          ; storage_class
           }
        | decl -> super#visit_fun_decl () decl
 

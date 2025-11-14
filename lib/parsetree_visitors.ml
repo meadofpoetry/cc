@@ -5,19 +5,19 @@ object (self : 'self)
   method visit_loop_id _env loop_id =
     loop_id
                
-  method visit_program env fun_decls =
-    List.map (self#visit_fun_decl env) fun_decls
+  method visit_program env decls =
+    List.map (self#visit_decl env) decls
 
   method visit_decl env = function
     | PFun_decl fdecl -> PFun_decl (self#visit_fun_decl env fdecl)
     | PVar_decl vdecl -> PVar_decl (self#visit_var_decl env vdecl)
 
-  method visit_fun_decl env { name; args; body } =
-    { name; args; body = Option.map (self#visit_block env) body }
+  method visit_fun_decl env { name; args; body; storage_class } =
+    { name; args; body = Option.map (self#visit_block env) body; storage_class }
 
-  method visit_var_decl env (name, expr) =
-    (name, Option.map (self#visit_expr env) expr)
-  
+  method visit_var_decl env { name; init; storage_class } =
+    { name; init = Option.map (self#visit_expr env) init; storage_class }
+
   method visit_block env item_list =
     List.map (self#visit_block_item env) item_list
 
