@@ -3,9 +3,10 @@ type reg32 = EAX | ECX | EDX | EDI | ESI
 
 type reg64 = RBP | RSP | RAX | RCX | RDX | RDI | RSI | R8 | R9 | R10 | R11
 
-type program = fun_decl list
+type program = top_level list
 
-and fun_decl = { name : Id.t; instr : instr list }
+and top_level = Function of { name : Id.t; instr : instr list; global : bool }
+              | StaticVar of { name : Id.t; init : int; global : bool }
 
 and instr = Mov of { src : operand; dst : operand }
           | Neg of operand
@@ -45,9 +46,14 @@ and operand = Imm of int
             | Reg of reg64
             | Pseudo of Id.t
             | Stack of int
+            | Data of Id.t
 
 (* TODO *)
 and cond = E | NE | G | GE | L | LE
+
+let is_memory = function
+  | Data _ | Stack _ -> true
+  | _ -> false
 
 let reg32_to_reg = function
   | EAX -> RAX
@@ -99,22 +105,63 @@ let epilog =
 
 let rec pp_program out decls =
   let open Format in
+  let emit_bss () =
+    let symbols = ListLabels.filter_map decls
+      ~f:(function StaticVar { name; init = 0; global = _ } -> Some name
+                 | _ -> None)
+    in
+    if not (List.is_empty symbols)
+    then pp_print_string out "\t.bss\n";
+    ListLabels.iter symbols ~f:(fun name ->
+        pp_print_string out "\t.align 4\n";
+        fprintf out "%s:" name;
+        pp_force_newline out ();
+        pp_print_string out "\t.zero 4\n")
+  in
+  let emit_data () =
+    let symbols = ListLabels.filter_map decls
+      ~f:(function StaticVar { name; init; global = _ } when init <> 0 -> Some (name, init)
+                 | _ -> None)
+    in
+    if not (List.is_empty symbols)
+    then pp_print_string out "\t.data\n";
+    ListLabels.iter symbols ~f:(fun (name, init) ->
+        pp_print_string out "\t.align 4\n";
+        fprintf out "%s:" name;
+        pp_force_newline out ();
+        fprintf out "\t.long %d" init;
+        pp_force_newline out ())
+  in
   pp_print_string out "\t.section .note.GNU-stack,\"\",@progbits\n";
-  pp_print_string out "\t.text\n";
-  ListLabels.iter decls ~f:(fun { name; _ } ->
-      fprintf out "\t.globl %s\n" name);
-  ListLabels.iter decls ~f:(fun f ->
-      pp_fun_decl out f);
-  pp_print_flush out ();
 
-and pp_fun_decl out { name; instr } =
-  let open Format in
+  (* Global symbols *)
+  ListLabels.iter decls ~f:(function
+      | Function { name; instr = _; global = true } ->
+         fprintf out "\t.globl %s\n" name
+      | StaticVar { name; init = _; global = true } ->
+         fprintf out "\t.globl %s\n" name
+      | _ -> ());
+
+  emit_bss ();
+  emit_data ();
+  (* functions *)
+  pp_print_string out "\t.text\n";
+  ListLabels.iter decls ~f:(fun f ->
+      pp_top_level out f);
+  pp_print_flush out ();
   
-  pp_force_newline out ();
-  fprintf out "%s:" name;
-  pp_force_newline out ();
-  pp_print_list ~pp_sep:pp_force_newline pp_instr out instr;
-  pp_force_newline out ()
+and pp_top_level out top_level =
+  let open Format in
+
+  match top_level with
+  | Function { name; instr; global = _ } ->
+     pp_force_newline out ();
+     fprintf out "%s:" name;
+     pp_force_newline out ();
+     pp_print_list ~pp_sep:pp_force_newline pp_instr out instr;
+     pp_force_newline out ()
+  | StaticVar _ ->
+     ()
 
 and pp_instr out = function
   | Mov { src; dst } ->
@@ -211,6 +258,8 @@ and pp_operand out = function
      Format.fprintf out "%d(%%rbp)" off
   | Pseudo name ->
      Format.fprintf out "P{%s}" name
+  | Data id ->
+     Format.fprintf out "%s(%%rip)" id
 
 and emit out instr args =
   let open Format in

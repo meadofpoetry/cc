@@ -1,16 +1,37 @@
 open Parsetree
 
-let rec tacky : Parsetree.program -> Tacky.program =
-  fun fs -> List.filter_map tacky_decl fs
+let rec tacky : Parsetree.program -> Tacky.program = fun fs ->
+  let funs = List.filter_map tacky_decl fs in
+  let vars = convert_symbols_to_tacky () in
+  vars @ funs
+
+and convert_symbols_to_tacky () =
+  let open Typecheck in
+  let symbols = Symbols.to_seq () in
+  let convert defs (name, (_, attr)) =
+    match attr with
+    | Symbols.AttrStatic { init = Symbols.Init i; global } ->
+       Tacky.StaticVar { name; init = i; global } :: defs
+    | Symbols.AttrStatic { init = Symbols.Tentative; global } ->
+       Tacky.StaticVar { name; init = 0; global } :: defs
+    | _ ->
+       defs
+  in
+  Seq.fold_left convert [] symbols
+  |> List.rev
 
 and tacky_decl = function
   | PFun_decl fun_decl -> tacky_fun_decl fun_decl
-  | PVar_decl _var_decl -> failwith "Toplevel var declaration not implemented"
+  | PVar_decl _ -> None
 
 and tacky_fun_decl { name; args; body; storage_class = _ } =
   body
   |> Option.map (fun body ->
-         Tacky.{ name; params = args; body = tacky_fun_body body })
+         Tacky.Function { name
+                        ; params = args
+                        ; body = tacky_fun_body body
+                        ; global = Typecheck.Symbols.is_global name
+       })
 
 and tacky_fun_body body =
   let instr = Dynarray.create () in
@@ -26,8 +47,10 @@ and tacky_fun_body body =
     | PVar_decl vdecl -> var_decl vdecl
     | PFun_decl _fdecl -> ()
 
-  and var_decl ({ name; init; storage_class = _ } : var_decl) =
-    match init with
+  and var_decl ({ name; init; storage_class } : var_decl) =
+    (* Don't generate tacky for non local vars *)
+    if Option.is_some storage_class then ()
+    else match init with
     | None -> ()
     | Some e ->
        ignore @@ expr (PAssign (PVar name, e))
@@ -198,16 +221,19 @@ and tacky_binop = function
   | PAnd | POr -> failwith "unreachable"
 
 let rec compile : Tacky.program -> X86.program =
-  fun (fs) -> List.map comp_fun_decl fs
+  fun (fs) -> List.map comp_top_level fs
 
-and comp_fun_decl { name; params; body } =
-  let instr =
-    comp_fun_args params @ List.concat_map comp_instr body
-  in
-  let alloc, instr' = replace_pseudo instr in
-  let instr'' = fix_instr instr' in
-  let instr''' = insert_prolog_epilog alloc instr'' in
-  { name; instr = instr''' }
+and comp_top_level = function
+  | Tacky.Function { name; params; body; global } ->
+     let instr =
+       comp_fun_args params @ List.concat_map comp_instr body
+     in
+     let alloc, instr' = replace_pseudo instr in
+     let instr'' = fix_instr instr' in
+     let instr''' = insert_prolog_epilog alloc instr'' in
+     X86.Function { name; instr = instr'''; global }
+  | Tacky.StaticVar { name; init; global } ->
+     X86.StaticVar { name; init; global }
 
 and comp_fun_args args =
   let open X86 in
@@ -385,41 +411,44 @@ and replace_pseudo : X86.instr list -> int * X86.instr list = fun instr ->
   let mapping = Hashtbl.create 10 in
   let replace = function
     | X86.Pseudo id ->
-       begin match Hashtbl.find_opt mapping id with
-       | Some off -> X86.Stack off
-       | None ->
-          next_off := !next_off - 8;
-          Hashtbl.add mapping id !next_off;
-          X86.Stack !next_off
-       end
+       if Typecheck.is_static id
+       then X86.Data id
+       else begin match Hashtbl.find_opt mapping id with
+            | Some off -> X86.Stack off
+            | None ->
+               next_off := !next_off - 8;
+               Hashtbl.add mapping id !next_off;
+               X86.Stack !next_off
+            end
     | other -> other
   in
   let instr' = List.map (X86.map_operand replace) instr in
   Int.abs !next_off, instr'
 
 and fix_instr instr =
+  let open X86 in
   let apply = function
-    | X86.Cmp (X86.Stack s, X86.Stack d) ->
-       [ X86.Mov { src = X86.Stack s; dst = X86.Reg X86.R10 }
-       ; X86.Cmp (X86.Reg X86.R10, X86.Stack d)
+    | X86.Cmp (src, dst) when is_memory src && is_memory dst ->
+       [ X86.Mov { src; dst = X86.Reg X86.R10 }
+       ; X86.Cmp (X86.Reg X86.R10, dst)
        ]
     | X86.Cmp (op, X86.Imm i) ->
        [ X86.Mov { src = X86.Imm i; dst = X86.Reg X86.R11 }
        ; X86.Cmp (op, X86.Reg X86.R11)
        ]
-    | X86.Mov { src = X86.Stack s; dst = X86.Stack d } ->
-       [ X86.Mov { src = X86.Stack s; dst = X86.Reg X86.R10 }
-       ; X86.Mov { src = X86.Reg X86.R10; dst = X86.Stack d }
+    | X86.Mov { src; dst } when is_memory src && is_memory dst ->
+       [ X86.Mov { src; dst = X86.Reg X86.R10 }
+       ; X86.Mov { src = X86.Reg X86.R10; dst }
        ]
-    | X86.Add { value = X86.Stack s; dst = X86.Stack d } ->
-       [ X86.Mov { src = X86.Stack s; dst = X86.Reg X86.R10 }
-       ; X86.Add { value = X86.Reg X86.R10; dst = X86.Stack d }
+    | X86.Add { value; dst } when is_memory value && is_memory dst ->
+       [ X86.Mov { src = value; dst = X86.Reg X86.R10 }
+       ; X86.Add { value = X86.Reg X86.R10; dst }
        ]
-    | X86.Sub { value = X86.Stack s; dst = X86.Stack d } ->
-       [ X86.Mov { src = X86.Stack s; dst = X86.Reg X86.R10 }
-       ; X86.Sub { value = X86.Reg X86.R10; dst = X86.Stack d }
+    | X86.Sub { value; dst } when is_memory value && is_memory dst ->
+       [ X86.Mov { src = value; dst = X86.Reg X86.R10 }
+       ; X86.Sub { value = X86.Reg X86.R10; dst }
        ]
-    | X86.Imul { value; dst = X86.Stack _ as addr } ->
+    | X86.Imul { value; dst = addr } when is_memory addr ->
        [ X86.Mov { src = addr; dst = X86.Reg X86.R11 }
        ; X86.Imul { value; dst = X86.Reg X86.R11 }
        ; X86.Mov { src = X86.Reg X86.R11; dst = addr }

@@ -21,6 +21,8 @@ module Symbols : sig
   val get_type : name:string -> ty option
 
   val get_type_exn : name:string -> ty
+
+  val to_seq : unit -> (string * (ty * attr)) Seq.t
   
   val is_defined : string -> bool
 
@@ -39,7 +41,7 @@ end = struct
     Hashtbl.clear symbols
   
   let add ~name ~attr ty =
-    Hashtbl.add symbols name (ty, attr)
+    Hashtbl.replace symbols name (ty, attr)
 
   let get ~name =
     Hashtbl.find_opt symbols name
@@ -55,6 +57,9 @@ end = struct
 
   let get_type_exn ~name =
     get_exn ~name |> fst
+
+  let to_seq () =
+    Hashtbl.to_seq symbols
   
   let is_defined name =
     match Hashtbl.find_opt symbols name with
@@ -73,6 +78,12 @@ end = struct
        false
   
 end
+
+let is_static name =
+  match Symbols.get ~name with
+  | Some (_, Symbols.AttrStatic _) -> true
+  | _ -> false
+  
 
 let var_init name =
   match Symbols.get ~name with
@@ -129,9 +140,6 @@ let run parsetree =
           | Some _ -> failwith "Non-constant initializer"
         in
         let global = ref (storage_class <> Some PStatic) in
-        (*   (storage_class = Some PExtern && Symbols.is_global name) *)
-        (*   ||  *)
-        (* in *)
 
         Symbols.get_type ~name
         |> Option.iter (fun prev_ty ->
@@ -144,16 +152,14 @@ let run parsetree =
                then failwith "Conflicting var linkage");
         
         let attr_init = match var_init name, default_init with
-          | None, _ ->
-             default_init
           | Some (Symbols.Init _), Symbols.Init _ ->
              failwith "Conflicting var decl"
-          | _, Symbols.Init _ ->
-             default_init
-          | Some Symbols.Tentative, _ ->
+          | Some (Symbols.Init i), _ ->
+             Symbols.Init i
+          | Some Symbols.Tentative, (Symbols.NoInit | Symbols.Tentative) ->
              Symbols.Tentative
-          | Some initial, _ ->
-             initial
+          | _ ->
+             default_init
         in
         let attr = Symbols.AttrStatic { init = attr_init; global = !global } in
         Symbols.add ~name ~attr TyInt;
@@ -185,7 +191,7 @@ let run parsetree =
              | _ ->
                 failwith "Non-constant init on local static var"
            in
-           let attr = Symbols.AttrStatic { init; global = true } in
+           let attr = Symbols.AttrStatic { init; global = false } in
            Symbols.add ~name ~attr TyInt
         | None ->
            Symbols.add ~name ~attr:Symbols.AttrLocal TyInt

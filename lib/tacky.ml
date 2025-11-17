@@ -1,7 +1,8 @@
 
-type program = fun_decl list [@@deriving show]
+type program = top_level list [@@deriving show]
 
-and fun_decl = { name : Id.t; params : Id.t list; body : instr list }
+and top_level = Function of { name : Id.t; params : Id.t list; body : instr list; global : bool }
+              | StaticVar of { name : Id.t; init : int; global : bool }
 
 and instr = Fun_call of { name : Id.t; args : value list; dst : value }
           | Return of value
